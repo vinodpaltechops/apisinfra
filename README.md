@@ -1,6 +1,8 @@
 # Azure Landing Zone — Terraform
 
-Hub-spoke landing zone following the Cloud Adoption Framework (CAF).
+Hub-spoke landing zone following the Cloud Adoption Framework (CAF), used to
+set up advanced infrastructure on Azure for deploying APIs and applications
+on APIM and AKS.
 
 ## Prerequisites
 
