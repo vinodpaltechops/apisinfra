@@ -16,6 +16,12 @@ terraform {
       version = "~> 3.6"
     }
   }
+  backend "azurerm" {
+    resource_group_name  = "rg-tfstate-vinorg-001"
+    storage_account_name = "stotfstatevinorgmjslia"
+    container_name       = "bootstrap"
+    key                  = "bootstrap.tfstate"
+  }
   # Bootstrap state is LOCAL — this is intentional.
   # All other layers point their backend here.
 }
@@ -41,6 +47,9 @@ resource "azurerm_resource_group" "tfstate" {
     Purpose   = "Terraform remote state"
     ManagedBy = "Terraform bootstrap"
   }
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "azurerm_storage_account" "tfstate" {
@@ -58,6 +67,9 @@ resource "azurerm_storage_account" "tfstate" {
       days = 30
     }
   }
+  lifecycle {
+    prevent_destroy = true
+  }
 
   tags = azurerm_resource_group.tfstate.tags
 }
@@ -72,9 +84,14 @@ resource "azurerm_storage_container" "layers" {
     "landing-zones-dev",
     "landing-zones-qa",
     "landing-zones-prod",
+    "test-vm",
   ])
 
   name                  = each.key
   storage_account_name  = azurerm_storage_account.tfstate.name
   container_access_type = "private"
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
