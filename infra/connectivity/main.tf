@@ -47,6 +47,9 @@ module "hub_vnet" {
   tags                = local.tags
 
   subnets = {
+    AzureFirewallSubnet = {
+      address_prefix = "10.0.1.0/27"
+    }
     GatewaySubnet = {
       address_prefix = "10.0.2.0/27"
     }
@@ -205,29 +208,3 @@ resource "azurerm_monitor_diagnostic_setting" "nsg_hub" {
   enabled_log { category = "NetworkSecurityGroupEvent" }
   enabled_log { category = "NetworkSecurityGroupRuleCounter" }
 }
-
-# # ── Outputs — needed by spoke layers ──────────────────────────────────────────
-# output "hub_vnet_id" {
-#   value       = azurerm_virtual_network.hub.id
-#   description = "Used by spoke peering resources"
-# }
-
-# output "hub_vnet_name" {
-#   value       = azurerm_virtual_network.hub.name
-#   description = "Used by spoke peering resources"
-# }
-
-# output "hub_rg_name" {
-#   value       = azurerm_resource_group.hub.name
-#   description = "Used by spoke peering resources"
-# }
-
-# output "dns_inbound_ip" {
-#   value       = azurerm_private_dns_resolver_inbound_endpoint.hub.ip_configurations[0].private_ip_address
-#   description = "Set this as dns_servers on all spoke VNets"
-# }
-
-# output "law_id" {
-#   value       = azurerm_log_analytics_workspace.hub.id
-#   description = "Used by spoke diagnostic settings"
-# }
