@@ -85,7 +85,8 @@ resource "azurerm_storage_container" "layers" {
     "landing-zones-qa",
     "landing-zones-prod",
     "test-vm",
-    "private-endpoints"
+    "private-endpoints",
+    "keyvault"
   ])
 
   name                  = each.key

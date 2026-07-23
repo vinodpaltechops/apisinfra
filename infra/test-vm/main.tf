@@ -68,6 +68,14 @@ resource "azurerm_windows_virtual_machine" "test" {
   # No public IP — this enforces our security model
   network_interface_ids = [azurerm_network_interface.vm.id]
 
+  # ADD THIS BLOCK — enables system-assigned managed identity
+  identity {
+    type = "SystemAssigned"
+    # Azure creates an Entra ID service principal automatically
+    # named exactly the same as the VM
+    # You never see or manage the credential
+  }
+
   os_disk {
     caching              = "ReadWrite"
     storage_account_type = "Standard_LRS"  # cheapest disk tier
