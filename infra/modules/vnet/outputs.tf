@@ -3,6 +3,3 @@ output "vnet_name" { value = azurerm_virtual_network.this.name }
 output "subnet_ids" {
   value = { for k, v in azurerm_subnet.this : k => v.id }
 }
-output "subnet_objects" {
-  value = azurerm_subnet.this
-}
