@@ -76,6 +76,25 @@ resource "azurerm_network_security_group" "spoke" {
     destination_port_range     = "*"
   }
 
+  # Management sources outside the hub/spoke ranges (e.g. the jump VNet, which
+  # lives in its own region + address space). Required for the jump VM to reach
+  # spoke private endpoints — NSG IS enforced on the PE subnets, so without this
+  # the deny-all below drops jump→PE traffic even though routing is fine.
+  dynamic "security_rule" {
+    for_each = var.mgmt_address_spaces
+    content {
+      name                       = "allow-mgmt-${security_rule.key}"
+      priority                   = 250 + security_rule.key
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "*"
+      source_address_prefix      = security_rule.value
+      destination_address_prefix = var.address_space
+      source_port_range          = "*"
+      destination_port_range     = "*"
+    }
+  }
+
   security_rule {
     name                       = "allow-azure-lb"
     priority                   = 300

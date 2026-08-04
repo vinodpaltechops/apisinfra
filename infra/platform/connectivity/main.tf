@@ -16,7 +16,11 @@ terraform {
 }
 
 provider "azurerm" {
-  features {}
+  features {
+    resource_group {
+      prevent_deletion_if_contains_resources = false
+    }
+  }
   # Subscription comes from the active Azure CLI session (az account show).
 }
 
@@ -178,6 +182,24 @@ resource "azurerm_private_dns_zone" "blob" {
   tags                = local.tags
 }
 
+# Private AKS API-server zone — pre-created and hub-linked so the hub resolver
+# can resolve the API FQDN during node bootstrap (this is what avoids the
+# System-zone chicken-and-egg deadlock). Name is region-specific.
+resource "azurerm_private_dns_zone" "aks" {
+  name                = "privatelink.${var.location}.azmk8s.io"
+  resource_group_name = azurerm_resource_group.hub.name
+  tags                = local.tags
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "aks_hub" {
+  name                  = "link-aks-zone-to-hub"
+  resource_group_name   = azurerm_resource_group.hub.name
+  private_dns_zone_name = azurerm_private_dns_zone.aks.name
+  virtual_network_id    = module.hub_vnet.vnet_id
+  registration_enabled  = false
+  tags                  = local.tags
+}
+
 resource "azurerm_private_dns_zone_virtual_network_link" "vault_hub" {
   name                  = "link-vault-zone-to-hub"
   resource_group_name   = azurerm_resource_group.hub.name
@@ -199,29 +221,29 @@ resource "azurerm_private_dns_zone_virtual_network_link" "blob_hub" {
 # ── Bastion — Basic SKU (cheapest option) ─────────────────────────────────────
 # Provides secure RDP/SSH to VMs across all peered spokes without public IPs
 # Basic SKU: ~$0.19/hr — destroy after each session to avoid charges
-# resource "azurerm_public_ip" "bastion" {
-#   name                = "pip-bastion-lab"
-#   resource_group_name = azurerm_resource_group.hub.name
-#   location            = var.location
-#   allocation_method   = "Static"
-#   sku                 = "Standard"
-#   tags                = local.tags
-# }
+resource "azurerm_public_ip" "bastion" {
+  name                = "pip-bastion-lab"
+  resource_group_name = azurerm_resource_group.hub.name
+  location            = var.location
+  allocation_method   = "Static"
+  sku                 = "Standard"
+  tags                = local.tags
+}
 
-# resource "azurerm_bastion_host" "hub" {
-#   name                = "bas-hub-lab-001"
-#   resource_group_name = azurerm_resource_group.hub.name
-#   location            = var.location
-#   sku                 = "Standard"
+resource "azurerm_bastion_host" "hub" {
+  name                = "bas-hub-lab-001"
+  resource_group_name = azurerm_resource_group.hub.name
+  location            = var.location
+  sku                 = "Standard"
 
-#   ip_configuration {
-#     name                 = "bastion-ipconfig"
-#     subnet_id            = module.hub_vnet.subnet_ids["AzureBastionSubnet"]
-#     public_ip_address_id = azurerm_public_ip.bastion.id
-#   }
+  ip_configuration {
+    name                 = "bastion-ipconfig"
+    subnet_id            = module.hub_vnet.subnet_ids["AzureBastionSubnet"]
+    public_ip_address_id = azurerm_public_ip.bastion.id
+  }
 
-#   tags = local.tags
-# }
+  tags = local.tags
+}
 
 # ── Log Analytics Workspace ────────────────────────────────────────────────────
 # Central log collection for all hub resources

@@ -2,6 +2,22 @@ variable "env" {
   type = string
 }
 
+variable "aks_private_dns_zone_id" {
+  description = "Pre-created hub-linked privatelink.<region>.azmk8s.io zone ID (from connectivity) for the private cluster's BYO DNS."
+  type        = string
+}
+
+variable "spoke_vnet_id" {
+  description = "Dev spoke VNet ID. The AKS control-plane identity needs Network Contributor here so it can (a) join nodes into the subnets and (b) link the BYO private DNS zone to this VNet during private-cluster reconcile."
+  type        = string
+}
+
+variable "grant_operator_cluster_admin" {
+  description = "Grant the identity running Terraform (you) AKS RBAC Cluster Admin, so kubectl works from your workstation. Set false for prod-like use (access via the jump VM instead)."
+  type        = bool
+  default     = false
+}
+
 variable "location" {
   type = string
 }

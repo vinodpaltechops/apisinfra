@@ -57,6 +57,7 @@ locals {
   hub_law_id              = data.terraform_remote_state.connectivity.outputs.law_id
   vault_dns_zone_id       = data.terraform_remote_state.connectivity.outputs.vault_private_dns_zone_id
   blob_dns_zone_id        = data.terraform_remote_state.connectivity.outputs.blob_private_dns_zone_id
+  aks_dns_zone_id         = data.terraform_remote_state.connectivity.outputs.aks_private_dns_zone_id
 }
 
 # Hub outputs come from the connectivity platform layer (separate state).
@@ -79,7 +80,10 @@ module "spoke_network" {
   location      = var.location
   address_space = local.address_space
   dns_servers   = [local.hub_dns_resolver_ip]
-  tags          = local.tags
+  # Allow the jump VNet (its own region/address space) into the spoke so it can
+  # reach the AKS + Key Vault private endpoints. NSG is enforced on the PE subnets.
+  mgmt_address_spaces = [local.jump_address_space]
+  tags                = local.tags
 }
 
 # ── Peering to the hub (both directions) ──────────────────────────────────────
@@ -147,6 +151,28 @@ module "linux_vm" {
   depends_on = [module.peering_jump]
 }
 
+# ── Global peering: jump VNet ↔ dev spoke (data path to the private AKS API) ──
+# Peering is non-transitive, so jump↔hub alone can't reach the API server's
+# private endpoint (which lives in the dev spoke). This direct peering gives the
+# jump VM a route to it. DNS still resolves via the hub resolver (jump↔hub).
+resource "azurerm_virtual_network_peering" "jump_to_spoke" {
+  name                         = "peer-jump-to-dev-spoke"
+  resource_group_name          = module.spoke_network.resource_group_name
+  virtual_network_name         = module.jump_network.vnet_name
+  remote_virtual_network_id    = module.spoke_network.vnet_id
+  allow_virtual_network_access = true
+  allow_forwarded_traffic      = true
+}
+
+resource "azurerm_virtual_network_peering" "spoke_to_jump" {
+  name                         = "peer-dev-spoke-to-jump"
+  resource_group_name          = module.spoke_network.resource_group_name
+  virtual_network_name         = module.spoke_network.vnet_name
+  remote_virtual_network_id    = module.jump_network.vnet_id
+  allow_virtual_network_access = true
+  allow_forwarded_traffic      = true
+}
+
 # ── Key Vault (private endpoint, VM identity gets Secrets User) ────────────────
 module "keyvault" {
   source = "../../modules/keyvault"
@@ -165,16 +191,18 @@ module "keyvault" {
 module "aks" {
   source = "../../modules/aks"
 
-  env                 = local.env
-  location            = var.location
-  resource_group_name = module.spoke_network.resource_group_name
-  system_subnet_id    = module.spoke_network.subnet_ids["snet-aks-system-${local.env}"]
-  user_subnet_id      = module.spoke_network.subnet_ids["snet-aks-user-${local.env}"]
-  # hub_vnet_id        = local.hub_vnet_id            # re-enable for private cluster
-  # spoke_vnet_id      = module.spoke_network.vnet_id # re-enable for private cluster
-  law_id               = local.hub_law_id
-  jump_vm_principal_id = module.linux_vm.vm_principal_id
-  tags                 = local.tags
+  env                     = local.env
+  location                = var.location
+  resource_group_name     = module.spoke_network.resource_group_name
+  system_subnet_id        = module.spoke_network.subnet_ids["snet-aks-system-${local.env}"]
+  user_subnet_id          = module.spoke_network.subnet_ids["snet-aks-user-${local.env}"]
+  spoke_vnet_id           = module.spoke_network.vnet_id
+  law_id                  = local.hub_law_id
+  jump_vm_principal_id    = module.linux_vm.vm_principal_id
+  aks_private_dns_zone_id = local.aks_dns_zone_id
+  tags                    = local.tags
+
+  grant_operator_cluster_admin = true # lab: allow kubectl from your workstation
 }
 
 # ── Storage account behind a private endpoint ─────────────────────────────────

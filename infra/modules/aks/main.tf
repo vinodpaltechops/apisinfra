@@ -24,6 +24,33 @@ locals {
   cluster_name = "aks-${var.env}-lab-001"
 }
 
+# ── Control-plane user-assigned identity (required for BYO private DNS zone) ───
+resource "azurerm_user_assigned_identity" "aks" {
+  name                = "id-aks-${var.env}"
+  resource_group_name = var.resource_group_name
+  location            = var.location
+  tags                = var.tags
+}
+
+# Must exist BEFORE the cluster: lets the control plane create the API-server
+# A-record in the hub's pre-created private DNS zone.
+resource "azurerm_role_assignment" "aks_dns_contributor" {
+  scope                = var.aks_private_dns_zone_id
+  role_definition_name = "Private DNS Zone Contributor"
+  principal_id         = azurerm_user_assigned_identity.aks.principal_id
+}
+
+# Creating a VNet link is two-sided: write on the zone (above) PLUS
+# virtualNetworks/join/action on the VNet being linked. During private-cluster
+# reconcile AKS links the BYO zone to the spoke VNet, so the identity needs
+# Network Contributor on the spoke (this also covers joining nodes into the
+# spoke's AKS subnets). Without it: LinkedAuthorizationFailed on cluster create.
+resource "azurerm_role_assignment" "aks_spoke_network_contributor" {
+  scope                = var.spoke_vnet_id
+  role_definition_name = "Network Contributor"
+  principal_id         = azurerm_user_assigned_identity.aks.principal_id
+}
+
 # ── AKS Cluster ────────────────────────────────────────────────────────────────
 resource "azurerm_kubernetes_cluster" "this" {
   name                = local.cluster_name
@@ -32,22 +59,22 @@ resource "azurerm_kubernetes_cluster" "this" {
   dns_prefix          = "aks-${var.env}-lab"
   kubernetes_version  = var.kubernetes_version
 
-  # Public API server. A PRIVATE cluster + the hub DNS resolver can't self-resolve
-  # the API server during node bootstrap: AKS's "System" private DNS zone links
-  # only to the spoke, but nodes query the hub resolver, which isn't linked to
-  # that zone until after creation — a deadlock. Kept public for the lab.
-  private_cluster_enabled = false
-  # To move to a PRIVATE cluster later: set the line above to true, uncomment
-  # these, and uncomment the DNS-zone links near the bottom of this file.
-  # private_cluster_public_fqdn_enabled = true
-  # private_dns_zone_id                 = "System"
+  # PRIVATE cluster with a bring-your-own DNS zone (pre-created + hub-linked in
+  # the connectivity layer). The BYO zone lets the hub resolver answer the API
+  # FQDN during node bootstrap — no System-zone deadlock, no public FQDN needed.
+  private_cluster_enabled             = true
+  private_cluster_public_fqdn_enabled = false
+  private_dns_zone_id                 = var.aks_private_dns_zone_id
 
   # Enable the OIDC issuer + workload identity so the OIDC output is meaningful.
   oidc_issuer_enabled       = true
   workload_identity_enabled = true
 
+  # User-assigned identity — required for BYO DNS (it holds Private DNS Zone
+  # Contributor on the zone before the cluster is created).
   identity {
-    type = "SystemAssigned"
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.aks.id]
   }
 
   # ── System node pool — kube-system only ─────────────────────────────────────
@@ -104,6 +131,13 @@ resource "azurerm_kubernetes_cluster" "this" {
   }
 
   tags = var.tags
+
+  # The control-plane identity must hold DNS-zone rights AND spoke-VNet join
+  # rights before the cluster is created (BYO private DNS zone reconcile).
+  depends_on = [
+    azurerm_role_assignment.aks_dns_contributor,
+    azurerm_role_assignment.aks_spoke_network_contributor,
+  ]
 }
 
 # ── User node pool — application workloads ────────────────────────────────────
@@ -136,6 +170,19 @@ resource "azurerm_role_assignment" "jump_vm_aks_user" {
   scope                = azurerm_kubernetes_cluster.this.id
   role_definition_name = "Azure Kubernetes Service Cluster User Role"
   principal_id         = var.jump_vm_principal_id
+}
+
+# ── RBAC: the Terraform operator (you) can run kubectl from your workstation ───
+# Azure RBAC for Kubernetes is enabled, so kubectl access needs an Azure role,
+# not just the kubeconfig. Set grant_operator_cluster_admin = false once you
+# access the cluster through the jump VM instead of your laptop.
+data "azurerm_client_config" "current" {}
+
+resource "azurerm_role_assignment" "operator_aks_admin" {
+  count                = var.grant_operator_cluster_admin ? 1 : 0
+  scope                = azurerm_kubernetes_cluster.this.id
+  role_definition_name = "Azure Kubernetes Service RBAC Cluster Admin"
+  principal_id         = data.azurerm_client_config.current.object_id
 }
 
 # ── (PRIVATE-CLUSTER ONLY) Link AKS's auto-created private DNS zone to hub+spoke

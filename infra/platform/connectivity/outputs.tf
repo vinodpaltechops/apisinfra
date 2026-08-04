@@ -32,3 +32,8 @@ output "blob_private_dns_zone_id" {
   value       = azurerm_private_dns_zone.blob.id
   description = "Shared privatelink.blob zone — spokes' storage PEs register here"
 }
+
+output "aks_private_dns_zone_id" {
+  value       = azurerm_private_dns_zone.aks.id
+  description = "Pre-created privatelink.<region>.azmk8s.io zone for private AKS (BYO DNS)"
+}
