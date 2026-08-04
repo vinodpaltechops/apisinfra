@@ -1,7 +1,8 @@
-# LAYER 5 — LANDING ZONE: DEV SPOKE
-# Purpose: deploys the Dev spoke VNet, peers it to the Hub, and adds
-# a UDR that routes all traffic through the Hub Firewall.
-# This pattern is identical for QA and Prod — only variable values differ.
+# LANDING ZONE: DEV  (single state — landing-zones-dev)
+# Composes the whole dev environment from shared modules:
+#   spoke-network → test-vm → keyvault → private-endpoints (+ hub peering)
+# Wired via module outputs — no cross-component terraform_remote_state.
+# qa and prod are identical apart from `env`, `address_space` and the backend.
 
 terraform {
   required_version = ">= 1.7.0"
@@ -13,189 +14,89 @@ terraform {
   }
   backend "azurerm" {
     resource_group_name  = "rg-tfstate-vinorg-001"
-    storage_account_name = "stotfstatevinorgmjslia"
+    storage_account_name = "stotfstatevinorg001"
     container_name       = "landing-zones-dev"
     key                  = "landing-zones-dev.tfstate"
   }
 }
 
-# Single subscription (free tier): one default provider for all spoke resources.
-# Hub and spoke live in the same subscription, so the peering module gets this
-# same provider for both its hub and spoke aliases. Subscription comes from
-# the active Azure CLI session (az account show).
+# One provider for the whole environment. Feature blocks that individual
+# components need (VM disk cleanup, Key Vault soft-delete) live here.
 provider "azurerm" {
-  features {}
+  features {
+    virtual_machine {
+      delete_os_disk_on_deletion = true
+      graceful_shutdown          = false
+    }
+    key_vault {
+      purge_soft_delete_on_destroy    = false
+      recover_soft_deleted_key_vaults = true
+    }
+  }
 }
 
 locals {
-  env   = "dev"
+  env           = "dev"
+  address_space = "10.1.0.0/16"
+
+  # Jump VM lives in a different region so it draws on that region's separate
+  # vCPU quota — southindia's 4 vCPU is reserved for the 2-node AKS.
+  jump_location      = "centralindia"
+  jump_address_space = "10.4.0.0/24"
+
   tags = merge(var.common_tags, {
     Layer       = "LandingZone"
     Environment = local.env
     CostCenter  = "CloudPlatform"
   })
+
+  hub_vnet_id             = data.terraform_remote_state.connectivity.outputs.hub_vnet_id
+  hub_vnet_name           = data.terraform_remote_state.connectivity.outputs.hub_vnet_name
+  hub_resource_group_name = data.terraform_remote_state.connectivity.outputs.hub_rg_name
+  hub_dns_resolver_ip     = data.terraform_remote_state.connectivity.outputs.dns_inbound_ip
+  hub_law_id              = data.terraform_remote_state.connectivity.outputs.law_id
+  vault_dns_zone_id       = data.terraform_remote_state.connectivity.outputs.vault_private_dns_zone_id
+  blob_dns_zone_id        = data.terraform_remote_state.connectivity.outputs.blob_private_dns_zone_id
+  aks_dns_zone_id         = data.terraform_remote_state.connectivity.outputs.aks_private_dns_zone_id
 }
 
-resource "azurerm_resource_group" "spoke" {
-  name     = "rg-spoke-${local.env}-${var.org_name}-001"
-  location = var.location
-  tags     = local.tags
+# Hub outputs come from the connectivity platform layer (separate state).
+data "terraform_remote_state" "connectivity" {
+  backend = "azurerm"
+  config = {
+    resource_group_name  = "rg-tfstate-vinorg-001"
+    storage_account_name = "stotfstatevinorg001"
+    container_name       = "connectivity"
+    key                  = "connectivity.tfstate"
+  }
 }
 
-# ── Spoke VNet ────────────────────────────────────────────────────────────────
-module "spoke_vnet" {
-  source = "../../modules/vnet"
+# ── Spoke network: RG + VNet + subnets + NSG + UDR ────────────────────────────
+module "spoke_network" {
+  source = "../../modules/spoke-network"
 
-  vnet_name           = "vnet-spoke-${local.env}-001"
-  resource_group_name = azurerm_resource_group.spoke.name
-  location            = var.location
-  address_space       = "10.1.0.0/16"
-  # Point DNS at Hub's Private DNS Resolver inbound endpoint
-  dns_servers         = [local.hub_dns_resolver_ip]
+  env           = local.env
+  org_name      = var.org_name
+  location      = var.location
+  address_space = local.address_space
+  dns_servers   = [local.hub_dns_resolver_ip]
+  # Allow the jump VNet (its own region/address space) into the spoke so it can
+  # reach the AKS + Key Vault private endpoints. NSG is enforced on the PE subnets.
+  mgmt_address_spaces = [local.jump_address_space]
   tags                = local.tags
-
-  subnets = {
-    "snet-aks-system-${local.env}" = {
-      address_prefix = "10.1.1.0/24"
-    }
-    "snet-aks-user-${local.env}" = {
-      address_prefix = "10.1.2.0/24"
-    }
-    "snet-app-${local.env}" = {
-      address_prefix = "10.1.3.0/24"
-    }
-    "snet-data-${local.env}" = {
-      address_prefix = "10.1.4.0/24"
-    }
-  }
 }
 
-# ── NSG for spoke subnets ──────────────────────────────────────────────────────
-resource "azurerm_network_security_group" "spoke" {
-  name                = "nsg-spoke-${local.env}"
-  resource_group_name = azurerm_resource_group.spoke.name
-  location            = var.location
-  tags                = local.tags
-
-  # Allow inbound from hub (management traffic, health checks)
-  security_rule {
-    name                       = "allow-from-hub"
-    priority                   = 100
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "*"
-    source_address_prefix      = "10.0.0.0/16"   # hub range
-    destination_address_prefix = "10.1.0.0/16"   # this spoke range
-    source_port_range          = "*"
-    destination_port_range     = "*"
-  }
-
-  # Allow inbound within this spoke (pod to pod, service to service)
-  security_rule {
-    name                       = "allow-within-spoke"
-    priority                   = 200
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "*"
-    source_address_prefix      = "10.1.0.0/16"
-    destination_address_prefix = "10.1.0.0/16"
-    source_port_range          = "*"
-    destination_port_range     = "*"
-  }
-
-  # Allow Azure infrastructure (load balancer health probes)
-  security_rule {
-    name                       = "allow-azure-lb"
-    priority                   = 300
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "*"
-    source_address_prefix      = "AzureLoadBalancer"
-    destination_address_prefix = "*"
-    source_port_range          = "*"
-    destination_port_range     = "*"
-  }
-
-  # Deny everything else inbound
-  security_rule {
-    name                       = "deny-all-inbound"
-    priority                   = 4096
-    direction                  = "Inbound"
-    access                     = "Deny"
-    protocol                   = "*"
-    source_address_prefix      = "*"
-    destination_address_prefix = "*"
-    source_port_range          = "*"
-    destination_port_range     = "*"
-  }
-}
-
-# Associate NSG to all workload subnets
-resource "azurerm_subnet_network_security_group_association" "aks_system" {
-  subnet_id                 = module.spoke_vnet.subnet_ids["snet-aks-system-${local.env}"]
-  network_security_group_id = azurerm_network_security_group.spoke.id
-}
-
-resource "azurerm_subnet_network_security_group_association" "aks_user" {
-  subnet_id                 = module.spoke_vnet.subnet_ids["snet-aks-user-${local.env}"]
-  network_security_group_id = azurerm_network_security_group.spoke.id
-}
-
-resource "azurerm_subnet_network_security_group_association" "app" {
-  subnet_id                 = module.spoke_vnet.subnet_ids["snet-app-${local.env}"]
-  network_security_group_id = azurerm_network_security_group.spoke.id
-}
-
-resource "azurerm_subnet_network_security_group_association" "data" {
-  subnet_id                 = module.spoke_vnet.subnet_ids["snet-data-${local.env}"]
-  network_security_group_id = azurerm_network_security_group.spoke.id
-}
-
-
-# ── UDR — forces all traffic through Hub Firewall ────────────────────────────
-# This is the critical piece. Without this UDR, peering exists but traffic
-# bypasses the firewall and goes directly between VNets.
-resource "azurerm_route_table" "spoke" {
-  name                       = "udr-spoke-${local.env}-001"
-  resource_group_name        = azurerm_resource_group.spoke.name
-  location                   = var.location
-  bgp_route_propagation_enabled = false  # prevent on-prem routes from overriding
-  tags                       = local.tags
-
-  route {
-    name                   = "default-to-firewall"
-    address_prefix         = "0.0.0.0/0"    # ALL traffic
-    next_hop_type  = "VnetLocal"
-    # When you add Azure Firewall later, change to:
-    # next_hop_type          = "VirtualAppliance"
-    # next_hop_in_ip_address = var.hub_firewall_private_ip
-  }
-}
-
-# Associate UDR to every workload subnet (not GatewaySubnet — that would break VPN)
-resource "azurerm_subnet_route_table_association" "spoke" {
-  for_each = toset([
-    "snet-aks-system-${local.env}",
-    "snet-aks-user-${local.env}",
-    "snet-app-${local.env}",
-    "snet-data-${local.env}"
-  ])
-
-  subnet_id      = module.spoke_vnet.subnet_ids[each.value]
-  route_table_id = azurerm_route_table.spoke.id
-}
-
-# ── VNet Peering (both directions via module) ─────────────────────────────────
-module "peering_dev_hub" {
+# ── Peering to the hub (both directions) ──────────────────────────────────────
+module "peering" {
   source = "../../modules/peering"
 
-  spoke_vnet_name           = module.spoke_vnet.vnet_name
-  spoke_vnet_id             = module.spoke_vnet.vnet_id
-  spoke_resource_group_name = azurerm_resource_group.spoke.name
+  spoke_vnet_name           = module.spoke_network.vnet_name
+  spoke_vnet_id             = module.spoke_network.vnet_id
+  spoke_resource_group_name = module.spoke_network.resource_group_name
   hub_vnet_name             = local.hub_vnet_name
   hub_vnet_id               = local.hub_vnet_id
   hub_resource_group_name   = local.hub_resource_group_name
-  hub_has_gateway           = false  # set true once VPN GW is deployed
+  hub_has_gateway           = false
 
   providers = {
     azurerm.hub   = azurerm
@@ -203,37 +104,115 @@ module "peering_dev_hub" {
   }
 }
 
-# Read outputs from connectivity layer (same backend storage)
-data "terraform_remote_state" "connectivity" {
-  backend = "azurerm"
-  config = {
-    resource_group_name  = "rg-tfstate-vinorg-001"
-    storage_account_name = "stotfstatevinorgmjslia"
-    container_name       = "connectivity"
-    key                  = "connectivity.tfstate"
+# ── Jump network (centralindia) + global peering to the hub ───────────────────
+# Separate region = separate vCPU quota. Global peering reaches the hub; DNS
+# points at the hub resolver so the jump VM can resolve private zones (ready for
+# when AKS/endpoints go fully private).
+module "jump_network" {
+  source = "../../modules/jump-network"
+
+  env                 = local.env
+  resource_group_name = module.spoke_network.resource_group_name
+  location            = local.jump_location
+  address_space       = local.jump_address_space
+  dns_servers         = [local.hub_dns_resolver_ip]
+  tags                = local.tags
+}
+
+module "peering_jump" {
+  source = "../../modules/peering"
+
+  spoke_vnet_name           = module.jump_network.vnet_name
+  spoke_vnet_id             = module.jump_network.vnet_id
+  spoke_resource_group_name = module.spoke_network.resource_group_name
+  hub_vnet_name             = local.hub_vnet_name
+  hub_vnet_id               = local.hub_vnet_id
+  hub_resource_group_name   = local.hub_resource_group_name
+  hub_has_gateway           = false
+
+  providers = {
+    azurerm.hub   = azurerm
+    azurerm.spoke = azurerm
   }
 }
 
-locals {
-  hub_vnet_id             = data.terraform_remote_state.connectivity.outputs.hub_vnet_id
-  hub_vnet_name           = data.terraform_remote_state.connectivity.outputs.hub_vnet_name
-  hub_resource_group_name = data.terraform_remote_state.connectivity.outputs.hub_rg_name
-  hub_dns_resolver_ip     = data.terraform_remote_state.connectivity.outputs.dns_inbound_ip
+# ── Linux jump VM (in centralindia, reachable over the global peering) ─────────
+module "linux_vm" {
+  source = "../../modules/linux-vm"
+
+  env                 = local.env
+  resource_group_name = module.spoke_network.resource_group_name
+  location            = local.jump_location
+  subnet_id           = module.jump_network.subnet_id
+  tags                = local.tags
+
+  # Bring peering (hub DNS reachability) up before the VM boots so cloud-init
+  # can resolve + download via the hub resolver and the jump NAT gateway.
+  depends_on = [module.peering_jump]
 }
 
+# ── Global peering: jump VNet ↔ dev spoke (data path to the private AKS API) ──
+# Peering is non-transitive, so jump↔hub alone can't reach the API server's
+# private endpoint (which lives in the dev spoke). This direct peering gives the
+# jump VM a route to it. DNS still resolves via the hub resolver (jump↔hub).
+resource "azurerm_virtual_network_peering" "jump_to_spoke" {
+  name                         = "peer-jump-to-dev-spoke"
+  resource_group_name          = module.spoke_network.resource_group_name
+  virtual_network_name         = module.jump_network.vnet_name
+  remote_virtual_network_id    = module.spoke_network.vnet_id
+  allow_virtual_network_access = true
+  allow_forwarded_traffic      = true
+}
 
-# ── RBAC — Dev team gets Contributor on this subscription only ────────────────
-# resource "azurerm_role_assignment" "dev_team_contributor" {
-#   scope                = "/subscriptions/${var.dev_subscription_id}"
-#   role_definition_name = "Contributor"
-#   principal_id         = var.dev_team_group_object_id
-#   provider             = azurerm.dev
-# }
+resource "azurerm_virtual_network_peering" "spoke_to_jump" {
+  name                         = "peer-dev-spoke-to-jump"
+  resource_group_name          = module.spoke_network.resource_group_name
+  virtual_network_name         = module.spoke_network.vnet_name
+  remote_virtual_network_id    = module.jump_network.vnet_id
+  allow_virtual_network_access = true
+  allow_forwarded_traffic      = true
+}
 
-# # Dev team gets Reader on the Hub VNet (to view, not modify)
-# resource "azurerm_role_assignment" "dev_team_hub_reader" {
-#   scope                = var.hub_vnet_id
-#   role_definition_name = "Reader"
-#   principal_id         = var.dev_team_group_object_id
-#   provider             = azurerm.connectivity
+# ── Key Vault (private endpoint, VM identity gets Secrets User) ────────────────
+module "keyvault" {
+  source = "../../modules/keyvault"
+
+  env                       = local.env
+  resource_group_name       = module.spoke_network.resource_group_name
+  location                  = var.location
+  subnet_id                 = module.spoke_network.data_subnet_id
+  vault_private_dns_zone_id = local.vault_dns_zone_id
+  vm_identity_principal_id  = module.linux_vm.vm_principal_id
+  allowed_ip_rules          = var.allowed_ip_rules
+  tags                      = local.tags
+}
+
+# ── AKS cluster (private, into the reserved snet-aks-* subnets) ────────────────
+module "aks" {
+  source = "../../modules/aks"
+
+  env                     = local.env
+  location                = var.location
+  resource_group_name     = module.spoke_network.resource_group_name
+  system_subnet_id        = module.spoke_network.subnet_ids["snet-aks-system-${local.env}"]
+  user_subnet_id          = module.spoke_network.subnet_ids["snet-aks-user-${local.env}"]
+  spoke_vnet_id           = module.spoke_network.vnet_id
+  law_id                  = local.hub_law_id
+  jump_vm_principal_id    = module.linux_vm.vm_principal_id
+  aks_private_dns_zone_id = local.aks_dns_zone_id
+  tags                    = local.tags
+
+  grant_operator_cluster_admin = true # lab: allow kubectl from your workstation
+}
+
+# ── Storage account behind a private endpoint ─────────────────────────────────
+# module "private_endpoints" {
+#   source = "../../modules/private-endpoints"
+
+#   env                      = local.env
+#   resource_group_name      = module.spoke_network.resource_group_name
+#   location                 = var.location
+#   subnet_id                = module.spoke_network.app_subnet_id
+#   blob_private_dns_zone_id = local.blob_dns_zone_id
+#   tags                     = local.tags
 # }

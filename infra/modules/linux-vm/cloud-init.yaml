@@ -1,0 +1,22 @@
+#cloud-config
+# Installs az CLI, kubectl, helm (and kubelogin) on first boot.
+package_update: true
+package_upgrade: false
+packages:
+  - curl
+  - apt-transport-https
+  - ca-certificates
+  - gnupg
+  - lsb-release
+
+runcmd:
+  # Azure CLI
+  - curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+  # kubectl (latest stable)
+  - curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+  - install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+  - rm -f kubectl
+  # helm 3
+  - curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  # kubelogin (AAD-integrated AKS auth) — best-effort
+  - az aks install-cli || true
