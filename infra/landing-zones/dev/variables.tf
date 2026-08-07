@@ -30,3 +30,9 @@ variable "mgmt_ssh_source_prefix" {
   type        = string
   default     = "163.223.165.0/24"
 }
+
+variable "ssh_public_key" {
+  description = "SSH public key CONTENT for the jump + mgmt VMs. Set in CI via TF_VAR_ssh_public_key (a GitHub variable). Leave null locally to read ~/.ssh/id_rsa.pub instead."
+  type        = string
+  default     = null
+}

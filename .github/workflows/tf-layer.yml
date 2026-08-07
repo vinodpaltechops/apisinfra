@@ -50,6 +50,9 @@ jobs:
       # Non-secret values live in committed *.auto.tfvars (auto-loaded).
       # Secrets come from GitHub Actions secrets as TF_VAR_* env vars:
       TF_VAR_admin_password: ${{ secrets.TF_VAR_ADMIN_PASSWORD }}
+      # SSH public key CONTENT (not secret) — the runner has no ~/.ssh key file,
+      # so the VM modules read the key from this var instead of a local file.
+      TF_VAR_ssh_public_key: ${{ vars.SSH_PUBLIC_KEY }}
     steps:
       - uses: actions/checkout@v4
 

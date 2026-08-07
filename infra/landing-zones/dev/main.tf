@@ -147,6 +147,7 @@ module "linux_vm" {
   resource_group_name = module.spoke_network.resource_group_name
   location            = local.jump_location
   subnet_id           = module.jump_network.subnet_id
+  ssh_public_key      = var.ssh_public_key
   tags                = local.tags
 
   # Bring peering (hub DNS reachability) up before the VM boots so cloud-init
@@ -171,6 +172,7 @@ module "linux_vm_mgmt" {
   subnet_id           = module.jump_network.subnet_id
   enable_public_ip    = true
   ssh_source_prefix   = var.mgmt_ssh_source_prefix
+  ssh_public_key      = var.ssh_public_key
   tags                = local.tags
 
   depends_on = [module.peering_jump]
