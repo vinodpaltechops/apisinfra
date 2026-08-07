@@ -1,17 +1,15 @@
-# Deploy: apply layers in DEPENDENCY ORDER on merge to main (or manual dispatch).
+# DEPLOY: apply layers ONE BY ONE in strict dependency order. Each layer runs
+# plan THEN apply (in tf-layer.yml) before the next starts — a dependent layer
+# can only PLAN after its dependency has been APPLIED and its outputs exist in
+# remote state. The `needs:` chain forces sequential execution (no parallelism):
 #
-# Order (from the terraform_remote_state graph):
-#   Tier 1 (no deps):     management-groups | connectivity
-#   Tier 2 (need tier 1): policies (→MG) | firewall (→conn) | dev (→conn)
-#   Tier 3:               policies-dine (→conn + MG)
+#   approval → management-groups → policies → connectivity (hub) → dev
+#                 (outputs mg_ids)  (reads mg_ids)   (hub outputs)   (reads hub outputs)
 #
-# One approval gates the whole run: add "Required reviewers" to the GitHub
-# "production" environment (Settings → Environments) and the `approval` job
-# pauses until someone approves.
-#
-# NOTE: bootstrap (the state storage account) is intentionally NOT here — it's a
-# one-time, run-once-locally step (it creates the backend this pipeline uses and
-# has prevent_destroy on the account). See docs / setup script.
+# One approval (production environment) gates the whole run.
+# NOT here: bootstrap (creates this state backend, run once locally) and — while
+# your account lacks root-MG rights — management-groups/policies may fail until
+# you elevate access + grant the SP Owner at the root MG.
 name: terraform-apply
 
 on:
@@ -32,43 +30,39 @@ jobs:
     runs-on: ubuntu-latest
     environment: production # attach required reviewers here to gate the deploy
     steps:
-      - run: echo "Deployment approved — applying in dependency order."
+      - run: echo "Deployment approved — applying layers one by one in order."
 
-  # ── Tier 1 ──────────────────────────────────────────────────────────────────
+  # 1) Management groups — MG hierarchy; outputs mg_ids
   management-groups:
     needs: approval
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/platform/management-groups, apply: true }
     secrets: inherit
 
-  connectivity:
-    needs: policies
-    uses: ./.github/workflows/tf-layer.yml
-    with: { layer_path: infra/platform/connectivity, apply: true }
-    secrets: inherit
-
-  # ── Tier 2 ──────────────────────────────────────────────────────────────────
+  # 2) Policies — reads mg_ids from (1); assigns policies at MG scope
   policies:
     needs: management-groups
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/platform/policies, apply: true }
     secrets: inherit
 
+  # 3) Connectivity (hub) — VNet, DNS resolver/zones, Log Analytics; outputs hub_*
+  connectivity:
+    needs: policies
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/connectivity, apply: true }
+    secrets: inherit
+
+  # 3b) Policies-DINE — optional; reads connectivity + MG. Uncomment to enable.
+  # policies-dine:
+  #   needs: connectivity
+  #   uses: ./.github/workflows/tf-layer.yml
+  #   with: { layer_path: infra/platform/policies-dine, apply: true }
+  #   secrets: inherit
+
+  # 4) Dev landing zone — reads hub outputs from (3); spoke, VMs, Key Vault, AKS
   dev:
     needs: connectivity
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/landing-zones/dev, apply: true }
     secrets: inherit
-
-  # firewall:                       # optional — Azure Firewall is expensive
-  #   needs: connectivity
-  #   uses: ./.github/workflows/tf-layer.yml
-  #   with: { layer_path: infra/platform/firewall, apply: true }
-  #   secrets: inherit
-
-  # ── Tier 3 ──────────────────────────────────────────────────────────────────
-  # policies-dine:
-  #   needs: [connectivity, management-groups]
-  #   uses: ./.github/workflows/tf-layer.yml
-  #   with: { layer_path: infra/platform/policies-dine, apply: true }
-  #   secrets: inherit
