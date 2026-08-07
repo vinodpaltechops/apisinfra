@@ -87,9 +87,9 @@ resource "azurerm_management_group_subscription_association" "landing_zones" {
   management_group_id = azurerm_management_group.landing_zones.id
   subscription_id     = "/subscriptions/${var.subscription_ids["landing_zones"]}"
 
-  lifecycle {
-    prevent_destroy = true
-  }
+  # lifecycle {
+  #   prevent_destroy = true
+  # }
 }
 
 # resource "azurerm_management_group_subscription_association" "connectivity" {

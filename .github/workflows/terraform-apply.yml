@@ -42,7 +42,7 @@ jobs:
     secrets: inherit
 
   connectivity:
-    needs: approval
+    needs: policies
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/platform/connectivity, apply: true }
     secrets: inherit
