@@ -1,16 +1,22 @@
-# DEPLOY: apply layers ONE BY ONE in strict dependency order. Each layer runs
-# plan THEN apply (in tf-layer.yml) before the next starts — a dependent layer
-# can only PLAN after its dependency has been APPLIED and its outputs exist in
-# remote state. The `needs:` chain forces sequential execution (no parallelism):
+# DEPLOY — the ONE pipeline for this stack.
+#
+# For each layer, plan AND apply complete together, then the next layer starts.
+# You cannot split plan and apply across layers: policies' PLAN needs
+# management-groups already APPLIED (its mg_ids output must exist in state), and
+# dev's PLAN needs connectivity already APPLIED. So each layer must be fully
+# plan+applied before its dependent can even plan.
+#
+# Strict sequential order (the `needs:` chain enforces one-at-a-time):
 #
 #   approval → management-groups → policies → connectivity (hub) → dev
-#                 (outputs mg_ids)  (reads mg_ids)   (hub outputs)   (reads hub outputs)
 #
+# Each job runs, in tf-layer.yml: init → plan (-out=tfplan) → apply tfplan.
 # One approval (production environment) gates the whole run.
-# NOT here: bootstrap (creates this state backend, run once locally) and — while
-# your account lacks root-MG rights — management-groups/policies may fail until
+#
+# NOT here: bootstrap (creates this state backend — run once locally). And while
+# your account lacks root-MG rights, management-groups/policies will fail until
 # you elevate access + grant the SP Owner at the root MG.
-name: terraform-apply
+name: terraform-deploy
 
 on:
   push:
@@ -30,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production # attach required reviewers here to gate the deploy
     steps:
-      - run: echo "Deployment approved — applying layers one by one in order."
+      - run: echo "Approved — plan+apply each layer in order, one at a time."
 
   # 1) Management groups — MG hierarchy; outputs mg_ids
   management-groups:
@@ -39,7 +45,7 @@ jobs:
     with: { layer_path: infra/platform/management-groups, apply: true }
     secrets: inherit
 
-  # 2) Policies — reads mg_ids from (1); assigns policies at MG scope
+  # 2) Policies — reads mg_ids from (1) [needs (1) fully applied first]
   policies:
     needs: management-groups
     uses: ./.github/workflows/tf-layer.yml
@@ -60,7 +66,7 @@ jobs:
   #   with: { layer_path: infra/platform/policies-dine, apply: true }
   #   secrets: inherit
 
-  # 4) Dev landing zone — reads hub outputs from (3); spoke, VMs, Key Vault, AKS
+  # 4) Dev landing zone — reads hub outputs from (3) [needs (3) fully applied first]
   dev:
     needs: connectivity
     uses: ./.github/workflows/tf-layer.yml
