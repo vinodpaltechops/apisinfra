@@ -22,7 +22,7 @@ jobs:
           - infra/platform/management-groups
           - infra/platform/connectivity
           - infra/platform/policies
-          - infra/platform/policies-dine
+          # - infra/platform/policies-dine
           - infra/landing-zones/dev
           # - infra/platform/firewall      # optional: Azure Firewall is $$$
           # - infra/landing-zones/qa

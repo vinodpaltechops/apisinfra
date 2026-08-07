@@ -67,8 +67,8 @@ jobs:
   #   secrets: inherit
 
   # ── Tier 3 ──────────────────────────────────────────────────────────────────
-  policies-dine:
-    needs: [connectivity, management-groups]
-    uses: ./.github/workflows/tf-layer.yml
-    with: { layer_path: infra/platform/policies-dine, apply: true }
-    secrets: inherit
+  # policies-dine:
+  #   needs: [connectivity, management-groups]
+  #   uses: ./.github/workflows/tf-layer.yml
+  #   with: { layer_path: infra/platform/policies-dine, apply: true }
+  #   secrets: inherit
