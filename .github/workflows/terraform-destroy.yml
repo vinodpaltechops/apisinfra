@@ -1,20 +1,17 @@
-# TEARDOWN: destroy every layer with `terraform destroy`, in REVERSE dependency
-# order, so state stays consistent (unlike deleting resources from the portal).
+# TEARDOWN — the mirror image of terraform-deploy.yml.
 #
-# Manual only (workflow_dispatch) + a typed confirmation + the "production"
-# environment approval gate. Never triggers on push/PR.
+# Destroy layers ONE BY ONE in the REVERSE of the deploy order, so each layer's
+# dependency still exists (in state) while it is destroyed:
 #
-# Destroy order (reverse of apply):
-#   Tier A: policies-dine            (depends on connectivity + MG)
-#   Tier B: dev | policies           (dev→connectivity, policies→MG)
-#   Tier C: connectivity             (last of the subscription-scoped layers)
+#   deploy :  management-groups → policies → connectivity (hub) → dev
+#   destroy:  dev → connectivity (hub) → policies → management-groups
 #
-# NOT torn down here (on purpose):
-#   - management-groups: its subscription association has
-#     lifecycle { prevent_destroy = true }, and MGs are the set-once governance
-#     skeleton — destroy it manually if you really mean to.
-#   - bootstrap: it holds the Terraform state backend itself; destroying it would
-#     pull the rug out from under every other layer mid-run.
+# The `needs:` chain forces sequential execution (no two layers at once). Using
+# `terraform destroy` keeps state consistent — unlike deleting from the portal,
+# which leaves the state drifted.
+#
+# Manual only (workflow_dispatch) + a typed "destroy" confirmation + the
+# production-environment approval gate. Never runs on push/PR.
 name: terraform-destroy
 
 on:
@@ -41,37 +38,45 @@ jobs:
             echo "::error::You must type exactly 'destroy' to confirm."
             exit 1
           fi
-          echo "Confirmed — destroying all layers in reverse dependency order."
+          echo "Confirmed — destroying layers one by one, in reverse order."
 
-  # ── Tier A ──────────────────────────────────────────────────────────────────
-  policies-dine:
-    needs: guard
-    uses: ./.github/workflows/tf-layer.yml
-    with: { layer_path: infra/platform/policies-dine, destroy: true }
-    secrets: inherit
-
-  # ── Tier B ──────────────────────────────────────────────────────────────────
+  # 1) Dev landing zone (destroyed first — nothing depends on it)
   dev:
-    needs: policies-dine
+    needs: guard
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/landing-zones/dev, destroy: true }
     secrets: inherit
 
+  # 1b) Policies-DINE — optional; if deployed, destroy it here (before hub/MG,
+  #     which it reads). Uncomment to enable.
+  # policies-dine:
+  #   needs: dev
+  #   uses: ./.github/workflows/tf-layer.yml
+  #   with: { layer_path: infra/platform/policies-dine, destroy: true }
+  #   secrets: inherit
+
+  # 2) Connectivity (hub) — after dev is gone (dev read the hub's state)
+  connectivity:
+    needs: dev
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/connectivity, destroy: true }
+    secrets: inherit
+
+  # 3) Policies — after hub; policies reads MG state, which still exists here
   policies:
-    needs: policies-dine
+    needs: connectivity
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/platform/policies, destroy: true }
     secrets: inherit
 
-  # firewall:                          # uncomment if you deploy the firewall layer
-  #   needs: policies-dine
-  #   uses: ./.github/workflows/tf-layer.yml
-  #   with: { layer_path: infra/platform/firewall, destroy: true }
-  #   secrets: inherit
-
-  # ── Tier C (last) ─────────────────────────────────────────────────────────────
-  connectivity:
-    needs: [dev, policies-dine] # both read connectivity's state during their destroy
+  # 4) Management groups (destroyed last).
+  #    WARNING: the subscription association has lifecycle { prevent_destroy =
+  #    true }, so this job FAILS until you remove that guard in
+  #    management-groups/main.tf. Destroying it does NOT delete your subscription
+  #    — it just moves it back to the tenant root MG. (bootstrap is never here:
+  #    it holds the state backend itself.)
+  management-groups:
+    needs: policies
     uses: ./.github/workflows/tf-layer.yml
-    with: { layer_path: infra/platform/connectivity, destroy: true }
+    with: { layer_path: infra/platform/management-groups, destroy: true }
     secrets: inherit
