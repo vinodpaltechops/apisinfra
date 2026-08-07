@@ -1,0 +1,77 @@
+# TEARDOWN: destroy every layer with `terraform destroy`, in REVERSE dependency
+# order, so state stays consistent (unlike deleting resources from the portal).
+#
+# Manual only (workflow_dispatch) + a typed confirmation + the "production"
+# environment approval gate. Never triggers on push/PR.
+#
+# Destroy order (reverse of apply):
+#   Tier A: policies-dine            (depends on connectivity + MG)
+#   Tier B: dev | policies           (dev→connectivity, policies→MG)
+#   Tier C: connectivity             (last of the subscription-scoped layers)
+#
+# NOT torn down here (on purpose):
+#   - management-groups: its subscription association has
+#     lifecycle { prevent_destroy = true }, and MGs are the set-once governance
+#     skeleton — destroy it manually if you really mean to.
+#   - bootstrap: it holds the Terraform state backend itself; destroying it would
+#     pull the rug out from under every other layer mid-run.
+name: terraform-destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "destroy" to confirm tearing down ALL layers'
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  guard:
+    name: Confirm teardown
+    runs-on: ubuntu-latest
+    environment: production # approval gate — add Required reviewers here
+    steps:
+      - name: Validate confirmation
+        run: |
+          if [ "${{ inputs.confirm }}" != "destroy" ]; then
+            echo "::error::You must type exactly 'destroy' to confirm."
+            exit 1
+          fi
+          echo "Confirmed — destroying all layers in reverse dependency order."
+
+  # ── Tier A ──────────────────────────────────────────────────────────────────
+  policies-dine:
+    needs: guard
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/policies-dine, destroy: true }
+    secrets: inherit
+
+  # ── Tier B ──────────────────────────────────────────────────────────────────
+  dev:
+    needs: policies-dine
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/landing-zones/dev, destroy: true }
+    secrets: inherit
+
+  policies:
+    needs: policies-dine
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/policies, destroy: true }
+    secrets: inherit
+
+  # firewall:                          # uncomment if you deploy the firewall layer
+  #   needs: policies-dine
+  #   uses: ./.github/workflows/tf-layer.yml
+  #   with: { layer_path: infra/platform/firewall, destroy: true }
+  #   secrets: inherit
+
+  # ── Tier C (last) ─────────────────────────────────────────────────────────────
+  connectivity:
+    needs: [dev, policies-dine] # both read connectivity's state during their destroy
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/connectivity, destroy: true }
+    secrets: inherit

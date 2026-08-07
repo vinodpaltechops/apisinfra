@@ -16,6 +16,11 @@ on:
         required: false
         default: false
         type: boolean
+      destroy:
+        description: Run `terraform destroy` instead of plan/apply (teardown).
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   id-token: write # REQUIRED — lets the job mint the GitHub OIDC token
@@ -52,18 +57,25 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Format check
-        run: terraform fmt -check
-
       - name: Init
         run: terraform init -input=false
 
+      - name: Format check
+        if: ${{ !inputs.destroy }}
+        run: terraform fmt -check
+
       - name: Validate
+        if: ${{ !inputs.destroy }}
         run: terraform validate
 
       - name: Plan
+        if: ${{ !inputs.destroy }}
         run: terraform plan -input=false -lock-timeout=5m -out=tfplan
 
       - name: Apply
-        if: ${{ inputs.apply }}
+        if: ${{ inputs.apply && !inputs.destroy }}
         run: terraform apply -input=false -lock-timeout=5m tfplan
+
+      - name: Destroy
+        if: ${{ inputs.destroy }}
+        run: terraform destroy -auto-approve -input=false -lock-timeout=5m
