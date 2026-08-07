@@ -141,9 +141,10 @@ resource "azurerm_kubernetes_cluster" "this" {
 }
 
 # ── User node pool — application workloads ────────────────────────────────────
-# DISABLED to fit the 4-vCPU regional quota (system node + jump VM already use
-# all 4). Re-enable once the quota is raised — nothing else needs to change; it
-# still references var.user_node_vm_size / var.user_subnet_id (kept declared).
+# ENABLED: this is the 2nd node of the cluster. With the jump VM moved to
+# centralindia, southindia's 4 vCPU is fully used by AKS = system node (2) +
+# user node (2). So NOTHING else fits in southindia — put extra VMs (e.g. the
+# public mgmt VM) in centralindia instead. Comment this out to free 2 vCPU.
 resource "azurerm_kubernetes_cluster_node_pool" "user" {
   name                  = "user"
   kubernetes_cluster_id = azurerm_kubernetes_cluster.this.id

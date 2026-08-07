@@ -218,32 +218,34 @@ resource "azurerm_private_dns_zone_virtual_network_link" "blob_hub" {
   tags                  = local.tags
 }
 
-# ── Bastion — Basic SKU (cheapest option) ─────────────────────────────────────
-# Provides secure RDP/SSH to VMs across all peered spokes without public IPs
-# Basic SKU: ~$0.19/hr — destroy after each session to avoid charges
-resource "azurerm_public_ip" "bastion" {
-  name                = "pip-bastion-lab"
-  resource_group_name = azurerm_resource_group.hub.name
-  location            = var.location
-  allocation_method   = "Static"
-  sku                 = "Standard"
-  tags                = local.tags
-}
-
-resource "azurerm_bastion_host" "hub" {
-  name                = "bas-hub-lab-001"
-  resource_group_name = azurerm_resource_group.hub.name
-  location            = var.location
-  sku                 = "Standard"
-
-  ip_configuration {
-    name                 = "bastion-ipconfig"
-    subnet_id            = module.hub_vnet.subnet_ids["AzureBastionSubnet"]
-    public_ip_address_id = azurerm_public_ip.bastion.id
-  }
-
-  tags = local.tags
-}
+# ── Bastion — DISABLED to save cost ───────────────────────────────────────────
+# Azure Bastion has no free tier (Standard ~$0.19/hr even idle, and peered-VNet
+# access needs Standard, not the free Developer SKU). Replaced by the public
+# mgmt VM in the dev landing zone (centralindia — southindia has no spare vCPU).
+# Re-enable this if you'd rather use Bastion again.
+# resource "azurerm_public_ip" "bastion" {
+#   name                = "pip-bastion-lab"
+#   resource_group_name = azurerm_resource_group.hub.name
+#   location            = var.location
+#   allocation_method   = "Static"
+#   sku                 = "Standard"
+#   tags                = local.tags
+# }
+#
+# resource "azurerm_bastion_host" "hub" {
+#   name                = "bas-hub-lab-001"
+#   resource_group_name = azurerm_resource_group.hub.name
+#   location            = var.location
+#   sku                 = "Standard"
+#
+#   ip_configuration {
+#     name                 = "bastion-ipconfig"
+#     subnet_id            = module.hub_vnet.subnet_ids["AzureBastionSubnet"]
+#     public_ip_address_id = azurerm_public_ip.bastion.id
+#   }
+#
+#   tags = local.tags
+# }
 
 # ── Log Analytics Workspace ────────────────────────────────────────────────────
 # Central log collection for all hub resources

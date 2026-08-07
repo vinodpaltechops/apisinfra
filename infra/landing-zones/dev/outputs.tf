@@ -14,6 +14,11 @@ output "vm_private_ip" {
   value = module.linux_vm.vm_private_ip
 }
 
+output "mgmt_vm_public_ip" {
+  description = "Public IP of the mgmt/bastion-replacement VM — SSH here as azureadmin."
+  value       = module.linux_vm_mgmt.public_ip
+}
+
 output "vm_identity_principal_id" {
   value = module.linux_vm.vm_principal_id
 }

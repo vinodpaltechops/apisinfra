@@ -28,7 +28,7 @@ resource "azurerm_virtual_network_peering" "hub_to_spoke" {
 
   allow_virtual_network_access = true
   allow_forwarded_traffic      = true
-  allow_gateway_transit        = var.hub_has_gateway  # share Hub gateway to spokes
+  allow_gateway_transit        = var.hub_has_gateway # share Hub gateway to spokes
 
   provider = azurerm.hub
 }

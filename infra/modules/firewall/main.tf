@@ -17,7 +17,7 @@ resource "azurerm_public_ip" "firewall" {
   resource_group_name = var.resource_group_name
   location            = var.location
   allocation_method   = "Static"
-  sku                 = "Standard"   # Standard SKU required for Azure Firewall
+  sku                 = "Standard" # Standard SKU required for Azure Firewall
   zones               = var.availability_zones
   tags                = var.tags
 }
@@ -26,7 +26,7 @@ resource "azurerm_firewall_policy" "this" {
   name                = "${var.firewall_name}-policy"
   resource_group_name = var.resource_group_name
   location            = var.location
-  sku                 = "Premium"   # Premium: IDPS, TLS inspection, URL filtering
+  sku                 = "Premium" # Premium: IDPS, TLS inspection, URL filtering
 
   # DNS proxy: Firewall acts as DNS forwarder for all spoke VMs
   # When enabled, all DNS queries from VMs go through Firewall → DNS Resolver
@@ -35,7 +35,7 @@ resource "azurerm_firewall_policy" "this" {
     servers       = var.dns_resolver_ips
   }
 
-  threat_intelligence_mode = "Alert"   # start with Alert, move to Deny after tuning
+  threat_intelligence_mode = "Alert" # start with Alert, move to Deny after tuning
   tags                     = var.tags
 }
 
@@ -43,14 +43,14 @@ resource "azurerm_firewall" "this" {
   name                = var.firewall_name
   resource_group_name = var.resource_group_name
   location            = var.location
-  sku_name            = "AZFW_VNet"   # VNet-injected (not vWAN)
+  sku_name            = "AZFW_VNet" # VNet-injected (not vWAN)
   sku_tier            = "Premium"
   firewall_policy_id  = azurerm_firewall_policy.this.id
   zones               = var.availability_zones
 
   ip_configuration {
     name                 = "fw-ipconfig"
-    subnet_id            = var.firewall_subnet_id   # must be named AzureFirewallSubnet
+    subnet_id            = var.firewall_subnet_id # must be named AzureFirewallSubnet
     public_ip_address_id = azurerm_public_ip.firewall.id
   }
 
@@ -62,7 +62,7 @@ resource "azurerm_firewall" "this" {
 resource "azurerm_firewall_policy_rule_collection_group" "core" {
   name               = "rcg-core"
   firewall_policy_id = azurerm_firewall_policy.this.id
-  priority           = 100   # lower number = evaluated first
+  priority           = 100 # lower number = evaluated first
 
   # Network rules: IP/port level (faster than app rules)
   network_rule_collection {
@@ -73,8 +73,8 @@ resource "azurerm_firewall_policy_rule_collection_group" "core" {
     rule {
       name                  = "allow-azure-monitor"
       protocols             = ["TCP"]
-      source_addresses      = ["10.0.0.0/8"]    # all internal RFC1918
-      destination_addresses = ["AzureMonitor"]   # service tag
+      source_addresses      = ["10.0.0.0/8"]   # all internal RFC1918
+      destination_addresses = ["AzureMonitor"] # service tag
       destination_ports     = ["443"]
     }
 
@@ -97,7 +97,7 @@ resource "azurerm_firewall_policy_rule_collection_group" "core" {
     rule {
       name                  = "allow-spoke-to-spoke"
       protocols             = ["Any"]
-      source_addresses      = ["10.1.0.0/8"]    # all spoke ranges
+      source_addresses      = ["10.1.0.0/8"] # all spoke ranges
       destination_addresses = ["10.1.0.0/8"]
       destination_ports     = ["*"]
       # All spoke-to-spoke traffic must transit the firewall
@@ -112,8 +112,8 @@ resource "azurerm_firewall_policy_rule_collection_group" "core" {
     action   = "Allow"
 
     rule {
-      name              = "windows-update"
-      source_addresses  = ["10.0.0.0/8"]
+      name             = "windows-update"
+      source_addresses = ["10.0.0.0/8"]
       destination_fqdns = [
         "*.windowsupdate.microsoft.com",
         "*.update.microsoft.com",

@@ -17,12 +17,25 @@ terraform {
 }
 
 locals {
-  vm_name = "vm-jump-${var.env}-001"
+  vm_name = "vm-${var.role}-${var.env}-001"
 }
 
 data "azurerm_client_config" "current" {}
 
-# ── NIC — private IP only, no public IP ───────────────────────────────────────
+# ── Optional public IP (enable_public_ip = true) ──────────────────────────────
+# Only for a public entry/bastion-replacement VM. A private jump keeps this off
+# and is reached via peering (az ssh vm / from the mgmt VM).
+resource "azurerm_public_ip" "vm" {
+  count               = var.enable_public_ip ? 1 : 0
+  name                = "pip-${local.vm_name}"
+  resource_group_name = var.resource_group_name
+  location            = var.location
+  allocation_method   = "Static"
+  sku                 = "Standard"
+  tags                = var.tags
+}
+
+# ── NIC ───────────────────────────────────────────────────────────────────────
 resource "azurerm_network_interface" "jump" {
   name                = "nic-${local.vm_name}"
   resource_group_name = var.resource_group_name
@@ -33,8 +46,62 @@ resource "azurerm_network_interface" "jump" {
     name                          = "internal"
     subnet_id                     = var.subnet_id
     private_ip_address_allocation = "Dynamic"
-    # No public IP — connect via `az ssh vm` (AAD login) over peering.
+    # Public IP only when enable_public_ip = true; null keeps a private jump.
+    public_ip_address_id = var.enable_public_ip ? azurerm_public_ip.vm[0].id : null
   }
+}
+
+# ── NIC-level NSG for the public VM — SSH from your IP only ────────────────────
+# Attached to the NIC (not the subnet) so it doesn't affect the private jump
+# sharing the subnet. Only created when the VM is public.
+resource "azurerm_network_security_group" "vm" {
+  count               = var.enable_public_ip ? 1 : 0
+  name                = "nsg-${local.vm_name}"
+  resource_group_name = var.resource_group_name
+  location            = var.location
+  tags                = var.tags
+
+  security_rule {
+    name                       = "allow-ssh-from-source"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_address_prefix      = var.ssh_source_prefix
+    destination_address_prefix = "*"
+    source_port_range          = "*"
+    destination_port_range     = "22"
+  }
+
+  security_rule {
+    name                       = "allow-azure-lb"
+    priority                   = 200
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "*"
+    source_address_prefix      = "AzureLoadBalancer"
+    destination_address_prefix = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+  }
+
+  security_rule {
+    name                       = "deny-internet-inbound"
+    priority                   = 4096
+    direction                  = "Inbound"
+    access                     = "Deny"
+    protocol                   = "*"
+    source_address_prefix      = "Internet"
+    destination_address_prefix = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+  }
+}
+
+resource "azurerm_network_interface_security_group_association" "vm" {
+  count                     = var.enable_public_ip ? 1 : 0
+  network_interface_id      = azurerm_network_interface.jump.id
+  network_security_group_id = azurerm_network_security_group.vm[0].id
 }
 
 # ── Linux VM ───────────────────────────────────────────────────────────────────
