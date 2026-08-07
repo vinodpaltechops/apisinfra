@@ -37,9 +37,9 @@ resource "azurerm_resource_group" "tfstate" {
     Purpose   = "Terraform remote state"
     ManagedBy = "Terraform bootstrap"
   }
-  # lifecycle {
-  #   prevent_destroy = true
-  # }
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "azurerm_storage_account" "tfstate" {
@@ -60,9 +60,9 @@ resource "azurerm_storage_account" "tfstate" {
       days = 30
     }
   }
-  # lifecycle {
-  #   prevent_destroy = true
-  # }
+  lifecycle {
+    prevent_destroy = true
+  }
 
   tags = azurerm_resource_group.tfstate.tags
 }
@@ -88,7 +88,7 @@ resource "azurerm_storage_container" "layers" {
   storage_account_name  = azurerm_storage_account.tfstate.name
   container_access_type = "private"
 
-  # lifecycle {
-  #   prevent_destroy = true
-  # }
+  lifecycle {
+    prevent_destroy = true
+  }
 }
