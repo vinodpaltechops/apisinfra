@@ -6,6 +6,9 @@ crash.log
 crash.*.log
 *.tfvars
 *.tfvars.json
+# …but DO commit non-secret, CI-loaded var files. Keep SECRETS out of these
+# (admin_password etc. come from GitHub secrets as TF_VAR_*). Auto-loaded by name.
+!*.auto.tfvars
 override.tf
 override.tf.json
 *_override.tf

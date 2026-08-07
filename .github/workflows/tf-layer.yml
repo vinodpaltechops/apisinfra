@@ -1,0 +1,69 @@
+# Reusable workflow: init / validate / plan (and optionally apply) ONE Terraform
+# layer, authenticating to Azure with a federated (OIDC) Service Principal — no
+# client secret stored anywhere. Called by terraform-plan.yml and
+# terraform-apply.yml with a different layer_path each time.
+name: tf-layer
+
+on:
+  workflow_call:
+    inputs:
+      layer_path:
+        description: Terraform layer directory (the working dir), e.g. infra/platform/connectivity
+        required: true
+        type: string
+      apply:
+        description: Run `terraform apply` after a successful plan.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  id-token: write # REQUIRED — lets the job mint the GitHub OIDC token
+  contents: read
+
+env:
+  TF_VERSION: "1.9.8"
+
+jobs:
+  terraform:
+    name: ${{ inputs.layer_path }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.layer_path }}
+    env:
+      # --- Azure auth for BOTH the azurerm provider and the azurerm backend ---
+      # OIDC: Terraform exchanges the GitHub token for an Azure AD token itself.
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      # RPs are registered out-of-band once (see setup script); skip per-run
+      # registration to dodge the free-tier "context canceled" RP races.
+      ARM_SKIP_PROVIDER_REGISTRATION: "true"
+      # --- tfvars ---
+      # Non-secret values live in committed *.auto.tfvars (auto-loaded).
+      # Secrets come from GitHub Actions secrets as TF_VAR_* env vars:
+      TF_VAR_admin_password: ${{ secrets.TF_VAR_ADMIN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Format check
+        run: terraform fmt -check
+
+      - name: Init
+        run: terraform init -input=false
+
+      - name: Validate
+        run: terraform validate
+
+      - name: Plan
+        run: terraform plan -input=false -lock-timeout=5m -out=tfplan
+
+      - name: Apply
+        if: ${{ inputs.apply }}
+        run: terraform apply -input=false -lock-timeout=5m tfplan

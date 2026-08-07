@@ -1,0 +1,74 @@
+# Deploy: apply layers in DEPENDENCY ORDER on merge to main (or manual dispatch).
+#
+# Order (from the terraform_remote_state graph):
+#   Tier 1 (no deps):     management-groups | connectivity
+#   Tier 2 (need tier 1): policies (→MG) | firewall (→conn) | dev (→conn)
+#   Tier 3:               policies-dine (→conn + MG)
+#
+# One approval gates the whole run: add "Required reviewers" to the GitHub
+# "production" environment (Settings → Environments) and the `approval` job
+# pauses until someone approves.
+#
+# NOTE: bootstrap (the state storage account) is intentionally NOT here — it's a
+# one-time, run-once-locally step (it creates the backend this pipeline uses and
+# has prevent_destroy on the account). See docs / setup script.
+name: terraform-apply
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  approval:
+    name: Approve deploy
+    runs-on: ubuntu-latest
+    environment: production # attach required reviewers here to gate the deploy
+    steps:
+      - run: echo "Deployment approved — applying in dependency order."
+
+  # ── Tier 1 ──────────────────────────────────────────────────────────────────
+  management-groups:
+    needs: approval
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/management-groups, apply: true }
+    secrets: inherit
+
+  connectivity:
+    needs: approval
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/connectivity, apply: true }
+    secrets: inherit
+
+  # ── Tier 2 ──────────────────────────────────────────────────────────────────
+  policies:
+    needs: management-groups
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/policies, apply: true }
+    secrets: inherit
+
+  dev:
+    needs: connectivity
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/landing-zones/dev, apply: true }
+    secrets: inherit
+
+  # firewall:                       # optional — Azure Firewall is expensive
+  #   needs: connectivity
+  #   uses: ./.github/workflows/tf-layer.yml
+  #   with: { layer_path: infra/platform/firewall, apply: true }
+  #   secrets: inherit
+
+  # ── Tier 3 ──────────────────────────────────────────────────────────────────
+  policies-dine:
+    needs: [connectivity, management-groups]
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/policies-dine, apply: true }
+    secrets: inherit

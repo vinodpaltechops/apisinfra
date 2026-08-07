@@ -1,0 +1,34 @@
+# PR gate: plan every layer in parallel (read-only). No ordering needed — plans
+# read the already-existing remote state of their dependencies. Post the PR,
+# review the plans, merge to main to trigger terraform-apply.yml.
+name: terraform-plan
+
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+      - ".github/workflows/**"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  plan:
+    strategy:
+      fail-fast: false
+      matrix:
+        layer:
+          - infra/platform/management-groups
+          - infra/platform/connectivity
+          - infra/platform/policies
+          - infra/platform/policies-dine
+          - infra/landing-zones/dev
+          # - infra/platform/firewall      # optional: Azure Firewall is $$$
+          # - infra/landing-zones/qa
+          # - infra/landing-zones/prod
+    uses: ./.github/workflows/tf-layer.yml
+    with:
+      layer_path: ${{ matrix.layer }}
+      apply: false
+    secrets: inherit
