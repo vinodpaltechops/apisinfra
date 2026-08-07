@@ -24,3 +24,9 @@ variable "common_tags" {
   type    = map(string)
   default = {}
 }
+
+variable "mgmt_ssh_source_prefix" {
+  description = "CIDR allowed to SSH into the public mgmt VM (your home/ISP public IP, e.g. 163.223.165.0/24). It's your only internet-facing door — keep it tight."
+  type        = string
+  default     = "163.223.165.0/24"
+}

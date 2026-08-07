@@ -59,14 +59,14 @@ resource "azurerm_management_group_policy_assignment" "require_tags" {
   enforce = true # "Deny" effect — blocks non-compliant resources
 }
 
-# ── 2. Deny public IP addresses in Landing Zones ─────────────────────────
-resource "azurerm_management_group_policy_assignment" "deny_public_ip" {
-  name                 = "deny-public-ip-lz"
-  display_name         = "Deny public IPs in Landing Zones"
-  management_group_id  = local.mg_ids["landing_zones"]
-  policy_definition_id = "/providers/Microsoft.Authorization/policyDefinitions/83a86a26-fd1f-447c-b59d-e51f44264114"
-  enforce              = true
-}
+# # ── 2. Deny public IP addresses in Landing Zones ─────────────────────────
+# resource "azurerm_management_group_policy_assignment" "deny_public_ip" {
+#   name                 = "deny-public-ip-lz"
+#   display_name         = "Deny public IPs in Landing Zones"
+#   management_group_id  = local.mg_ids["landing_zones"]
+#   policy_definition_id = "/providers/Microsoft.Authorization/policyDefinitions/83a86a26-fd1f-447c-b59d-e51f44264114"
+#   enforce              = true
+# }
 
 # ── 3. Deny storage accounts with public internet access ──────────────────────
 resource "azurerm_management_group_policy_assignment" "deny_storage_public" {

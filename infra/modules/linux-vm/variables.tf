@@ -2,6 +2,24 @@ variable "env" {
   type = string
 }
 
+variable "role" {
+  description = "VM role, used in the name: vm-<role>-<env>-001. 'jump' = private tester, 'mgmt' = public bastion-replacement."
+  type        = string
+  default     = "jump"
+}
+
+variable "enable_public_ip" {
+  description = "Attach a public IP + a NIC-level NSG (SSH from ssh_source_prefix only). Use for a public entry/bastion-replacement VM; keep false for a private jump."
+  type        = bool
+  default     = false
+}
+
+variable "ssh_source_prefix" {
+  description = "CIDR allowed to SSH in when enable_public_ip = true (your home/ISP public IP). Ignored for private VMs."
+  type        = string
+  default     = null
+}
+
 variable "resource_group_name" {
   type = string
 }

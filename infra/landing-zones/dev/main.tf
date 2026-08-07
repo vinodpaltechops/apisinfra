@@ -32,6 +32,9 @@ provider "azurerm" {
       purge_soft_delete_on_destroy    = false
       recover_soft_deleted_key_vaults = true
     }
+    resource_group {
+      prevent_deletion_if_contains_resources = false
+    }
   }
 }
 
@@ -148,6 +151,28 @@ module "linux_vm" {
 
   # Bring peering (hub DNS reachability) up before the VM boots so cloud-init
   # can resolve + download via the hub resolver and the jump NAT gateway.
+  depends_on = [module.peering_jump]
+}
+
+# ── Public mgmt VM (bastion replacement) — centralindia, same jump VNet ────────
+# Free-tier substitute for Azure Bastion. Lives in centralindia because
+# southindia's 4 vCPU is fully used by the 2-node AKS; centralindia has room
+# (jump 2 + mgmt 2 = 4/4). Public SSH (locked to your IP via a NIC-level NSG);
+# from here `ssh -A azureadmin@<jump-private-ip>` to reach the private jump VM,
+# or test the private endpoints directly (jump VNet is peered to hub + spoke and
+# uses the hub resolver for DNS).
+module "linux_vm_mgmt" {
+  source = "../../modules/linux-vm"
+
+  env                 = local.env
+  role                = "mgmt"
+  resource_group_name = module.spoke_network.resource_group_name
+  location            = local.jump_location
+  subnet_id           = module.jump_network.subnet_id
+  enable_public_ip    = true
+  ssh_source_prefix   = var.mgmt_ssh_source_prefix
+  tags                = local.tags
+
   depends_on = [module.peering_jump]
 }
 
