@@ -113,10 +113,13 @@ resource "azurerm_linux_virtual_machine" "jump" {
   admin_username        = var.admin_username
   network_interface_ids = [azurerm_network_interface.jump.id]
 
-  # SSH key auth — no password auth. pathexpand handles a leading ~.
+  # SSH key auth — no password auth. Prefer the key CONTENT passed in
+  # (var.ssh_public_key — set in CI via TF_VAR_ssh_public_key); fall back to
+  # reading a local file (var.ssh_public_key_path) for laptop runs. try() keeps
+  # the missing-file case from erroring on the CI runner. pathexpand handles ~.
   admin_ssh_key {
     username   = var.admin_username
-    public_key = file(pathexpand(var.ssh_public_key_path))
+    public_key = coalesce(var.ssh_public_key, try(file(pathexpand(var.ssh_public_key_path)), null))
   }
 
   os_disk {
