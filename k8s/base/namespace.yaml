@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: content-hub
+  labels:
+    app.kubernetes.io/part-of: content-hub
+    # Pod Security Admission — every workload here already runs non-root with
+    # all capabilities dropped, so enforce the strictest profile and let the
+    # API server reject anything that regresses.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

@@ -1,0 +1,40 @@
+# Single origin for the whole app: the browser sees one host, so the SPA can
+# call /api/* with no CORS and no build-time API URL.
+#
+# Path order matters to ingress-nginx only in that the most specific prefix
+# wins, so /api goes to the BFF and everything else falls through to the SPA.
+# No rewrite: the backend already serves /api/v1/... at that exact path.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: content-hub
+  labels:
+    app.kubernetes.io/part-of: content-hub
+  annotations:
+    # The internal LB terminates plain HTTP on a private IP — forcing a TLS
+    # redirect here would just break it. Put a cert on this ingress (and drop
+    # this annotation) when you give the app a real private DNS name.
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/proxy-body-size: 1m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "15"
+spec:
+  ingressClassName: nginx-internal
+  rules:
+    # No host: the app is reached by the internal LB's private IP, so a host
+    # rule would never match. Add one once it has a DNS name in the hub zone.
+    - http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 8000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 8080

@@ -232,6 +232,22 @@ module "aks" {
   grant_operator_cluster_admin = true # lab: allow kubectl from your workstation
 }
 
+# ── Container registry for the application images ─────────────────────────────
+# Lives in the landing zone (not the platform) because the images it holds are
+# workload artefacts, and its only consumer is this spoke's cluster. Basic SKU
+# = public endpoint; see the module header for the trade-off and the path to a
+# private-endpoint Premium registry.
+module "acr" {
+  source = "../../modules/acr"
+
+  registry_name              = var.acr_name
+  resource_group_name        = module.spoke_network.resource_group_name
+  location                   = var.location
+  sku                        = var.acr_sku
+  kubelet_identity_object_id = module.aks.kubelet_identity
+  tags                       = local.tags
+}
+
 # ── Storage account behind a private endpoint ─────────────────────────────────
 # module "private_endpoints" {
 #   source = "../../modules/private-endpoints"

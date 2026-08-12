@@ -20,6 +20,18 @@ tfplan
 tfplan.json
 *.tfplan.json
 
+# Python (apps/content-api, apps/backend)
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Node (apps/frontend) — package-lock.json IS committed; CI runs `npm ci`
+node_modules/
+dist/
+.vite/
+
 # macOS
 .DS_Store
 

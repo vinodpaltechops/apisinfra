@@ -1,0 +1,83 @@
+# AKS PLATFORM BOOTSTRAP — one-time (and idempotent) in-cluster prerequisites.
+#
+# Right now that means the INTERNAL ingress-nginx controller that app-deploy's
+# Ingress object depends on. Run this once after the dev landing zone is
+# applied, and again whenever you change k8s/platform/ingress-nginx-values.yaml.
+#
+# Like app-deploy, this reaches the private cluster through
+# `az aks command invoke` — the AKS run-command pod ships with both kubectl and
+# helm, so no runner-side cluster credentials and no network route are needed.
+#
+# The chart itself is pulled from kubernetes.github.io by that in-cluster pod,
+# which egresses through the AKS standard load balancer.
+name: aks-platform-bootstrap
+
+on:
+  workflow_dispatch:
+    inputs:
+      uninstall:
+        description: "Remove ingress-nginx instead of installing it"
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AKS_RESOURCE_GROUP: ${{ vars.AKS_RESOURCE_GROUP || 'rg-spoke-dev-vinorg-001' }}
+  AKS_CLUSTER_NAME: ${{ vars.AKS_CLUSTER_NAME || 'aks-dev-lab-001' }}
+  INGRESS_NGINX_VERSION: "4.12.0"
+
+jobs:
+  ingress-nginx:
+    name: Internal ingress controller
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Uninstall
+        if: ${{ inputs.uninstall }}
+        run: |
+          az aks command invoke \
+            --resource-group "$AKS_RESOURCE_GROUP" \
+            --name "$AKS_CLUSTER_NAME" \
+            --command "helm uninstall ingress-nginx --namespace ingress-nginx"
+
+      # NOTE on quoting: everything inside --command is executed by a shell in
+      # the run-command pod, so a bare newline would end the command. Each
+      # invocation below is therefore a single line, chained with &&.
+      # --file uploads into that pod's working directory, so helm refers to the
+      # values file by its basename.
+      - name: Install / upgrade
+        if: ${{ !inputs.uninstall }}
+        run: |
+          # Upload from the workspace root so the file lands next to the
+          # command with a predictable basename, whatever --file does with
+          # relative directories.
+          cp k8s/platform/ingress-nginx-values.yaml ./ingress-nginx-values.yaml
+
+          helm_cmd="helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx --version ${INGRESS_NGINX_VERSION} --namespace ingress-nginx --create-namespace --values ingress-nginx-values.yaml --wait --timeout 10m"
+
+          az aks command invoke \
+            --resource-group "$AKS_RESOURCE_GROUP" \
+            --name "$AKS_CLUSTER_NAME" \
+            --command "helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx && helm repo update && ${helm_cmd}" \
+            --file ingress-nginx-values.yaml
+
+      # The private IP the internal load balancer allocated from
+      # snet-aks-user-dev. This is the address you browse to from the mgmt VM.
+      - name: Report the internal load balancer IP
+        if: ${{ !inputs.uninstall }}
+        run: |
+          az aks command invoke \
+            --resource-group "$AKS_RESOURCE_GROUP" \
+            --name "$AKS_CLUSTER_NAME" \
+            --command "kubectl get ingressclass && kubectl -n ingress-nginx get svc ingress-nginx-controller -o wide"

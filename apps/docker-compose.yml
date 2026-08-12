@@ -1,0 +1,51 @@
+# Local dev — the same three-service topology as the cluster, minus the ingress.
+# nginx in the frontend container proxies /api to the backend, so the browser
+# only ever talks to http://localhost:8080 (same-origin, no CORS), exactly like
+# it does behind the internal ingress in AKS.
+#
+#   docker compose -f apps/docker-compose.yml up --build
+#   open http://localhost:8080
+services:
+  content-api:
+    build: ./content-api
+    environment:
+      APP_VERSION: 0.1.0-local
+      LOG_LEVEL: INFO
+    # Published only so you can poke /docs directly; the frontend never uses it.
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  backend:
+    build: ./backend
+    environment:
+      APP_VERSION: 0.1.0-local
+      CONTENT_API_URL: http://content-api:8000
+      CACHE_TTL_SECONDS: "30"
+      LOG_LEVEL: INFO
+    ports:
+      - "8001:8000"
+    depends_on:
+      content-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  frontend:
+    build: ./frontend
+    environment:
+      BACKEND_URL: http://backend:8000
+    ports:
+      - "8080:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
