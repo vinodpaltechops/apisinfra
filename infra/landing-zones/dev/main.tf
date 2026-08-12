@@ -240,6 +240,11 @@ module "aks" {
   pod_cidr                = local.aks_pod_cidr # same value the spoke NSG allows
   tags                    = local.tags
 
+  # The mgmt VM is the bastion replacement, so it needs to actually run kubectl.
+  # Its managed identity is the only usable sign-in there: it has no browser,
+  # and Entra security defaults block `az login --use-device-code`.
+  additional_admin_principal_ids = [module.linux_vm_mgmt.vm_principal_id]
+
   grant_operator_cluster_admin = true # lab: allow kubectl from your workstation
 }
 

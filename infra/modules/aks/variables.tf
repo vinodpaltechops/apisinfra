@@ -55,6 +55,23 @@ variable "jump_vm_principal_id" {
   type        = string
 }
 
+variable "additional_admin_principal_ids" {
+  description = <<-EOT
+    Extra principal object IDs granted BOTH AKS roles needed to run kubectl:
+    "Cluster User Role" (the ARM permission to fetch a kubeconfig) and "RBAC
+    Cluster Admin" (the data-plane permission Azure RBAC then checks). One
+    without the other fails — the first at `az aks get-credentials`, the second
+    at the first kubectl call.
+
+    Intended for the mgmt/bastion VM's managed identity. On a headless VM,
+    `az login --identity` is the only workable sign-in: Entra security defaults
+    block the device-code flow (AADSTS530035), and there is no browser for the
+    interactive flow.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
 variable "kubernetes_version" {
   description = "AKS version. null = let AKS pick the region's default. Check: az aks get-versions --location <region> -o table"
   type        = string
