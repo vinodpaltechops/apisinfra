@@ -34,6 +34,22 @@ variable "dns_servers" {
   default     = []
 }
 
+variable "aks_pod_cidr" {
+  description = <<-EOT
+    Pod CIDR of an Azure CNI Overlay AKS cluster in this spoke (e.g. 192.168.0.0/16),
+    or null when the spoke has no AKS cluster.
+
+    REQUIRED whenever AKS is present. Overlay pod traffic between nodes keeps the
+    POD source/destination IPs — Azure does not SNAT it to the node IPs — so those
+    packets match none of the 10.x allow rules below and get dropped by
+    deny-all-inbound. Symptom: pods on one node cannot reach pods (including
+    CoreDNS) on another, so DNS times out cluster-wide while every node still
+    reports Ready.
+  EOT
+  type        = string
+  default     = null
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

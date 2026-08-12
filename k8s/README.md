@@ -128,6 +128,26 @@ az role assignment list --scope $(az acr show -n acrdevvinorg001 --query id -o t
 Almost always node capacity. `kubectl -n content-hub describe pod <name>` will
 say `Insufficient cpu`. Drop a replica or lower requests.
 
+**Every pod's DNS times out, but all nodes are `Ready`** *(hit this for real — see below)*
+The spoke NSG must permit the Azure CNI Overlay pod CIDR. Overlay pod traffic
+between nodes keeps the **pod** source/destination IPs (`192.168.x.x`) — Azure
+does not SNAT it to the node IPs — so it matches none of the `10.x` allow rules
+and falls through to `deny-all-inbound`. Intra-node traffic never reaches the
+NSG, which is why CoreDNS's own readiness probe passes and the cluster looks
+healthy. The `allow-aks-pods-outbound-sourced` / `allow-spoke-to-aks-pods` rules
+in `infra/modules/spoke-network` fix it; `aks_pod_cidr` must be passed in.
+
+Distinguishing test — from a pod, a *cluster-internal* name failing to resolve
+rules out anything to do with internet access:
+
+```bash
+az aks command invoke -g rg-spoke-dev-vinorg-001 -n aks-dev-lab-001 \
+  --command 'kubectl --server=https://$KUBERNETES_SERVICE_HOST:443 get nodes'
+```
+
+The `--server` override matters: without it `kubectl` needs DNS to resolve
+`kubernetes.default.svc` and fails for the very reason you are debugging.
+
 **`backend` pods running but never `Ready`**
 Readiness calls `content-api`. Check `content-api` is up, then suspect the
 NetworkPolicies — `allow-backend-to-content-api` is the relevant one:

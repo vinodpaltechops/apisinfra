@@ -8,8 +8,12 @@
 # `az aks command invoke` — the AKS run-command pod ships with both kubectl and
 # helm, so no runner-side cluster credentials and no network route are needed.
 #
-# The chart itself is pulled from kubernetes.github.io by that in-cluster pod,
-# which egresses through the AKS standard load balancer.
+# The chart is pulled ON THE RUNNER and uploaded to that pod as a .tgz, rather
+# than having the in-cluster pod fetch it from kubernetes.github.io itself. The
+# runner has plain internet access; a pod in a private cluster is exactly where
+# an outbound chart download is least reliable. (The controller *image* is still
+# pulled from registry.k8s.io by the node, which egresses via the AKS load
+# balancer — that path is already proven by every other addon image.)
 name: aks-platform-bootstrap
 
 on:
@@ -56,20 +60,34 @@ jobs:
       # invocation below is therefore a single line, chained with &&.
       # --file uploads into that pod's working directory, so helm refers to the
       # values file by its basename.
+      - uses: azure/setup-helm@v4
+        if: ${{ !inputs.uninstall }}
+
+      # Runner-side download. The cluster never talks to kubernetes.github.io.
+      - name: Fetch chart
+        if: ${{ !inputs.uninstall }}
+        run: |
+          helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+          helm repo update
+          helm pull ingress-nginx/ingress-nginx --version "$INGRESS_NGINX_VERSION" --destination .
+
+          # Upload both files from the workspace root so they land in the
+          # run-command pod's working directory under predictable basenames.
+          cp k8s/platform/ingress-nginx-values.yaml ./ingress-nginx-values.yaml
+          ls -l ingress-nginx-*.tgz ingress-nginx-values.yaml
+
       - name: Install / upgrade
         if: ${{ !inputs.uninstall }}
         run: |
-          # Upload from the workspace root so the file lands next to the
-          # command with a predictable basename, whatever --file does with
-          # relative directories.
-          cp k8s/platform/ingress-nginx-values.yaml ./ingress-nginx-values.yaml
+          chart="ingress-nginx-${INGRESS_NGINX_VERSION}.tgz"
 
-          helm_cmd="helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx --version ${INGRESS_NGINX_VERSION} --namespace ingress-nginx --create-namespace --values ingress-nginx-values.yaml --wait --timeout 10m"
-
+          # Single line: everything inside --command runs in a shell in the
+          # run-command pod, so a bare newline would terminate the command.
           az aks command invoke \
             --resource-group "$AKS_RESOURCE_GROUP" \
             --name "$AKS_CLUSTER_NAME" \
-            --command "helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx && helm repo update && ${helm_cmd}" \
+            --command "helm upgrade --install ingress-nginx ./${chart} --namespace ingress-nginx --create-namespace --values ingress-nginx-values.yaml --wait --timeout 10m" \
+            --file "$chart" \
             --file ingress-nginx-values.yaml
 
       # The private IP the internal load balancer allocated from

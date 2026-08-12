@@ -95,6 +95,46 @@ resource "azurerm_network_security_group" "spoke" {
     }
   }
 
+  # AKS (Azure CNI Overlay) pod traffic. Pod IPs live outside the VNet address
+  # space and are NOT translated to node IPs when crossing between nodes, so
+  # without these two rules deny-all-inbound silently breaks the cluster:
+  # every node stays Ready, intra-node traffic works (it never reaches the NSG),
+  # but any pod-to-pod hop that lands on another node — including every pod's
+  # DNS query to CoreDNS — times out.
+  #
+  # Two directions are needed:
+  #   pod → anything : pod-to-pod across nodes, plus pod → node-hosted services
+  #   spoke → pod    : node/load-balancer traffic delivered to a pod elsewhere
+  dynamic "security_rule" {
+    for_each = var.aks_pod_cidr == null ? [] : [var.aks_pod_cidr]
+    content {
+      name                       = "allow-aks-pods-outbound-sourced"
+      priority                   = 210
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "*"
+      source_address_prefix      = security_rule.value
+      destination_address_prefix = "*"
+      source_port_range          = "*"
+      destination_port_range     = "*"
+    }
+  }
+
+  dynamic "security_rule" {
+    for_each = var.aks_pod_cidr == null ? [] : [var.aks_pod_cidr]
+    content {
+      name                       = "allow-spoke-to-aks-pods"
+      priority                   = 220
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "*"
+      source_address_prefix      = var.address_space
+      destination_address_prefix = security_rule.value
+      source_port_range          = "*"
+      destination_port_range     = "*"
+    }
+  }
+
   security_rule {
     name                       = "allow-azure-lb"
     priority                   = 300

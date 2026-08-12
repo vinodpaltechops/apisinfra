@@ -42,6 +42,13 @@ locals {
   env           = "dev"
   address_space = "10.1.0.0/16"
 
+  # Azure CNI Overlay pod CIDR. Single source of truth: the AKS module needs it
+  # to configure the overlay, and the spoke NSG needs it to permit cross-node
+  # pod traffic (see the spoke-network module's aks_pod_cidr variable — without
+  # that rule, deny-all-inbound breaks cluster DNS). Not routable in the VNet,
+  # so it must not overlap any spoke/hub address space.
+  aks_pod_cidr = "192.168.0.0/16"
+
   # Jump VM lives in a different region so it draws on that region's separate
   # vCPU quota — southindia's 4 vCPU is reserved for the 2-node AKS.
   jump_location      = "centralindia"
@@ -86,7 +93,10 @@ module "spoke_network" {
   # Allow the jump VNet (its own region/address space) into the spoke so it can
   # reach the AKS + Key Vault private endpoints. NSG is enforced on the PE subnets.
   mgmt_address_spaces = [local.jump_address_space]
-  tags                = local.tags
+  # Required for the AKS cluster below: opens the NSG to overlay pod IPs so
+  # cross-node pod traffic (including DNS to CoreDNS) is not denied.
+  aks_pod_cidr = local.aks_pod_cidr
+  tags         = local.tags
 }
 
 # ── Peering to the hub (both directions) ──────────────────────────────────────
@@ -227,6 +237,7 @@ module "aks" {
   law_id                  = local.hub_law_id
   jump_vm_principal_id    = module.linux_vm.vm_principal_id
   aks_private_dns_zone_id = local.aks_dns_zone_id
+  pod_cidr                = local.aks_pod_cidr # same value the spoke NSG allows
   tags                    = local.tags
 
   grant_operator_cluster_admin = true # lab: allow kubectl from your workstation
