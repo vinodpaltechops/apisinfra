@@ -1,0 +1,128 @@
+# content-api — innermost service. ClusterIP only: it is not in the ingress and
+# a NetworkPolicy restricts it to traffic from the backend.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: content-api
+  labels:
+    app.kubernetes.io/name: content-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: content-hub
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: content-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0 # never drop below the current replica count mid-roll
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: content-api
+        app.kubernetes.io/component: api
+        app.kubernetes.io/part-of: content-hub
+    spec:
+      # The system pool carries only_critical_addons_enabled (a
+      # CriticalAddonsOnly taint), so app pods land on the user pool anyway.
+      # Stating it makes the intent explicit rather than incidental.
+      nodeSelector:
+        nodepool-type: user
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          # Preferred, not required: the user pool is a single node today, so a
+          # hard rule would leave the second replica permanently Pending.
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: content-api
+      containers:
+        - name: content-api
+          image: content-api:latest # replaced by the overlay's images: block
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: LOG_LEVEL
+              value: INFO
+            # APP_VERSION is baked into the image at build time (--build-arg),
+            # so the version the pod reports can never drift from the binary.
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              # No CPU limit on purpose: throttling a request-serving process
+              # adds tail latency for no isolation benefit when the requests
+              # already reserve its share. Memory IS limited — that one is a
+              # hard failure mode.
+              memory: 256Mi
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 15 # 30s to boot before anything else gives up
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # readOnlyRootFilesystem needs a writable /tmp for anything Python may
+        # spool there.
+        - name: tmp
+          emptyDir: {}
+      terminationGracePeriodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: content-api
+  labels:
+    app.kubernetes.io/name: content-api
+    app.kubernetes.io/part-of: content-hub
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: content-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: content-api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: content-api

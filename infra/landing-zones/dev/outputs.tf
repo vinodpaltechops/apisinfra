@@ -44,6 +44,16 @@ output "aks_oidc_issuer_url" {
   value = module.aks.oidc_issuer_url
 }
 
+output "acr_name" {
+  description = "Short registry name — used by the app pipeline for `az acr login`."
+  value       = module.acr.registry_name
+}
+
+output "acr_login_server" {
+  description = "Image prefix for the k8s manifests, e.g. acrdevvinorg001.azurecr.io."
+  value       = module.acr.login_server
+}
+
 # The private_endpoints module is currently disabled in main.tf.
 # output "storage_account_name" {
 #   value = module.private_endpoints.storage_account_name

@@ -1,0 +1,113 @@
+# The cluster runs network_policy = "azure", so these are enforced.
+#
+# Shape: deny everything into the namespace, then allow exactly the three hops
+# the architecture calls for. Egress is left open apart from being explicit
+# about DNS — locking egress down too would also need rules for the API server
+# and the ACR endpoint, which is more brittle than it is worth here.
+#
+# If a pod goes unready right after applying these, this file is the first
+# thing to suspect: `kubectl -n content-hub delete netpol --all` restores the
+# default allow-all while you debug.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {} # every pod in the namespace
+  policyTypes:
+    - Ingress
+---
+# Hop 1: internal ingress controller → frontend and backend.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-controller
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [frontend, backend]
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              # Auto-applied by the API server since k8s 1.21.
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 8000
+          protocol: TCP
+---
+# Hop 2: frontend → backend. Only used when traffic reaches the frontend pod's
+# /api fallback proxy rather than being routed by the ingress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-to-backend
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: backend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: frontend
+      ports:
+        - port: 8000
+          protocol: TCP
+---
+# Hop 3: backend → content-api. Nothing else may reach content-api.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-to-content-api
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: content-api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: backend
+      ports:
+        - port: 8000
+          protocol: TCP
+---
+# DNS must be spelled out for every pod — without it, resolving
+# content-api.content-hub.svc.cluster.local fails and the BFF never goes ready.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Everything else stays permitted (image pulls from ACR, outbound HTTP).
+    # Narrow this once you know every destination the workloads need.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0

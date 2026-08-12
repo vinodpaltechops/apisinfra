@@ -1,0 +1,55 @@
+# Horizontal autoscaling for the two request-serving Python services.
+#
+# maxReplicas is capped low on purpose: the user node pool is a single
+# Standard_D2as_v5 (2 vCPU). Scaling past what one node can hold just produces
+# Pending pods — the cluster autoscaler is not enabled on this pool.
+#
+# The frontend has no HPA: nginx serving a static bundle is not the bottleneck
+# and two replicas already cover availability.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          # Percentage of the *request* (50m), not of a core — so this triggers
+          # at ~35m of actual CPU per pod.
+          averageUtilization: 70
+  behavior:
+    scaleDown:
+      # Long window: the BFF's cache means load arrives in bursts, and flapping
+      # replicas would cold-start the cache every time.
+      stabilizationWindowSeconds: 300
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: content-api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: content-api
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300

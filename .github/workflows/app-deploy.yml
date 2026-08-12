@@ -1,0 +1,202 @@
+# APP DEPLOY — builds the three microservice images, pushes them to ACR, and
+# rolls them out to the PRIVATE AKS cluster.
+#
+# The interesting constraint: the AKS API server has no public endpoint, so a
+# GitHub-hosted runner cannot run `kubectl` against it. Instead the deploy step
+# uses `az aks command invoke`, which asks the AKS resource provider to run the
+# command from a pod INSIDE the cluster and streams the output back. That is a
+# control-plane (ARM) call, so it needs no network route into the spoke.
+#
+# The alternative — a self-hosted runner on the jump VM — is the right answer
+# once you also want a private-endpoint ACR. See infra/modules/acr/main.tf.
+#
+# Authorisation the deploy SP needs, both already in place:
+#   • ARM: Microsoft.ContainerService/managedClusters/runcommand/action
+#     (covered by its Owner assignment at the root management group)
+#   • Kubernetes: "Azure Kubernetes Service RBAC Cluster Admin" on the cluster
+#     (granted by infra/modules/aks — grant_operator_cluster_admin = true)
+#
+# Prerequisite, once per cluster: the internal ingress controller.
+#   Run the aks-platform-bootstrap workflow before the first deploy.
+name: app-deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "k8s/**"
+      - ".github/workflows/app-deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write # mint the GitHub OIDC token for federated Azure login
+  contents: read
+
+env:
+  # Defaults match the Terraform defaults (infra/landing-zones/dev). Override
+  # with repository variables if you renamed anything.
+  ACR_NAME: ${{ vars.ACR_NAME || 'acrdevvinorg001' }}
+  AKS_RESOURCE_GROUP: ${{ vars.AKS_RESOURCE_GROUP || 'rg-spoke-dev-vinorg-001' }}
+  AKS_CLUSTER_NAME: ${{ vars.AKS_CLUSTER_NAME || 'aks-dev-lab-001' }}
+  K8S_NAMESPACE: content-hub
+  IMAGE_REPO_PREFIX: content-hub
+
+jobs:
+  # ── 1) Tests — gate the build. Cheap, and a broken BFF contract should never
+  #        reach a registry, let alone the cluster.
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: content-api — pytest
+        working-directory: apps/content-api
+        run: |
+          pip install -q -r requirements-dev.txt
+          pytest -q
+
+      - name: backend — pytest
+        working-directory: apps/backend
+        run: |
+          pip install -q -r requirements-dev.txt
+          pytest -q
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/frontend/package-lock.json
+
+      - name: frontend — build
+        working-directory: apps/frontend
+        run: |
+          npm ci
+          npm run build
+
+  # ── 2) Build + push all three images in parallel ────────────────────────────
+  build:
+    name: Build ${{ matrix.service }}
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        service: [content-api, backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Exchanges the AAD token for an ACR refresh token — no admin user, no
+      # registry password anywhere.
+      - name: ACR login
+        run: az acr login --name "$ACR_NAME"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/${{ matrix.service }}
+          push: true
+          # Immutable tag only. A moving `latest` makes a rollout
+          # unreproducible and breaks `kubectl rollout undo`.
+          tags: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_REPO_PREFIX }}/${{ matrix.service }}:${{ github.sha }}
+          build-args: |
+            APP_VERSION=${{ github.sha }}
+          platforms: linux/amd64 # AKS node pools here are x86_64
+          provenance: false # keep the ACR manifest a plain image, not an index
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  # ── 3) Roll out to the private cluster ──────────────────────────────────────
+  deploy:
+    name: Deploy to AKS
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production # attach required reviewers here to gate rollouts
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # `kubectl kustomize` can build an overlay but not edit one, so the
+      # standalone binary is needed for `kustomize edit set image`.
+      - name: Install kustomize
+        run: |
+          curl -sSfL -o /tmp/kustomize.tar.gz \
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
+          tar -xzf /tmp/kustomize.tar.gz -C /usr/local/bin kustomize
+          kustomize version
+        env:
+          KUSTOMIZE_VERSION: 5.5.0
+
+      # Pin every image to this commit, then flatten the overlay to one file so
+      # the whole desired state travels as a single upload.
+      - name: Render manifests
+        working-directory: k8s/overlays/dev
+        run: |
+          registry="${ACR_NAME}.azurecr.io/${IMAGE_REPO_PREFIX}"
+          for svc in content-api backend frontend; do
+            kustomize edit set image "${svc}=${registry}/${svc}:${GITHUB_SHA}"
+          done
+          kustomize build . > "${GITHUB_WORKSPACE}/rendered.yaml"
+          echo "--- images in this rollout ---"
+          grep 'image:' "${GITHUB_WORKSPACE}/rendered.yaml"
+
+      # `command invoke` runs kubectl from inside the cluster. -f uploads the
+      # file into that pod's working directory.
+      - name: Apply
+        run: |
+          az aks command invoke \
+            --resource-group "$AKS_RESOURCE_GROUP" \
+            --name "$AKS_CLUSTER_NAME" \
+            --command "kubectl apply -f rendered.yaml" \
+            --file rendered.yaml
+
+      # Separate step so a failed rollout is distinguishable from a failed
+      # apply. --timeout exceeds the AcrPull RBAC propagation window, which can
+      # hold the very first pull in ImagePullBackOff for a minute or two.
+      - name: Wait for rollout
+        run: |
+          az aks command invoke \
+            --resource-group "$AKS_RESOURCE_GROUP" \
+            --name "$AKS_CLUSTER_NAME" \
+            --command "kubectl -n $K8S_NAMESPACE rollout status deploy/content-api --timeout=300s &&
+                       kubectl -n $K8S_NAMESPACE rollout status deploy/backend     --timeout=300s &&
+                       kubectl -n $K8S_NAMESPACE rollout status deploy/frontend    --timeout=300s"
+
+      - name: Report endpoint
+        run: |
+          az aks command invoke \
+            --resource-group "$AKS_RESOURCE_GROUP" \
+            --name "$AKS_CLUSTER_NAME" \
+            --command "kubectl -n $K8S_NAMESPACE get pods,ing -o wide &&
+                       kubectl -n ingress-nginx get svc ingress-nginx-controller"
+
+      # Rollback on failure. Kubernetes keeps the previous ReplicaSet
+      # (revisionHistoryLimit: 3), so this restores the last good images.
+      - name: Roll back on failure
+        if: failure()
+        run: |
+          az aks command invoke \
+            --resource-group "$AKS_RESOURCE_GROUP" \
+            --name "$AKS_CLUSTER_NAME" \
+            --command "kubectl -n $K8S_NAMESPACE rollout undo deploy/content-api || true;
+                       kubectl -n $K8S_NAMESPACE rollout undo deploy/backend     || true;
+                       kubectl -n $K8S_NAMESPACE rollout undo deploy/frontend    || true"

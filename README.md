@@ -52,6 +52,22 @@ terraform output storage_account_name
 # Then update backend "storage_account_name" in each subsequent layer's main.tf
 ```
 
+## Application workload
+
+A three-service demo application runs on the dev spoke's private AKS cluster:
+
+```
+apps/          content-api (FastAPI) → backend BFF (FastAPI) → frontend (React + nginx)
+k8s/           kustomize manifests + internal ingress-nginx values
+```
+
+- [apps/README.md](apps/README.md) — architecture, API contracts, local dev
+- [k8s/README.md](k8s/README.md) — deploy runbook, access path, troubleshooting
+
+Pipelines: `aks-platform-bootstrap` (once, installs the internal ingress
+controller) then `app-deploy` (build → ACR → rollout). Both reach the private
+API server through `az aks command invoke` rather than a network route.
+
 ## Key design decisions
 
 - **One state file per layer** — blast radius isolation; a mistake in a spoke doesn't touch the hub state

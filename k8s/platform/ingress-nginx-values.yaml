@@ -1,0 +1,82 @@
+# Helm values for ingress-nginx as an INTERNAL controller.
+#
+#   helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+#   helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+#     --namespace ingress-nginx --create-namespace \
+#     -f k8s/platform/ingress-nginx-values.yaml
+#
+# Run this from the jump VM — the API server is private, and the Helm chart
+# pulls from registry.k8s.io, which the VM reaches through the spoke NAT
+# gateway (AKS nodes use their own LB egress).
+#
+# The Service gets a private frontend IP from snet-aks-user-dev (10.1.2.0/24)
+# instead of a public one. The AKS control-plane identity already holds Network
+# Contributor on the spoke VNet, so it can allocate that IP.
+
+controller:
+  # A distinct class name, not the default "nginx". Naming it for what it is
+  # leaves room for a second, public controller later without a collision.
+  ingressClassResource:
+    name: nginx-internal
+    enabled: true
+    default: false
+    controllerValue: "k8s.io/ingress-nginx-internal"
+  ingressClass: nginx-internal
+
+  replicaCount: 2
+
+  service:
+    annotations:
+      service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+      # Pin the frontend IP to the AKS user subnet. Without this the LB picks
+      # the subnet of the first node pool, which happens to be the same here —
+      # but relying on that is how a subnet change silently moves your VIP.
+      service.beta.kubernetes.io/azure-load-balancer-internal-subnet: "snet-aks-user-dev"
+    externalTrafficPolicy: Local # preserves the client IP in access logs
+
+  # Both replicas land on the single user node today; keep it soft so the
+  # second one schedules instead of sitting Pending.
+  nodeSelector:
+    nodepool-type: user
+
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            topologyKey: kubernetes.io/hostname
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: ingress-nginx
+                app.kubernetes.io/component: controller
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 384Mi
+
+  config:
+    # Real client IPs in the logs, forwarded from the internal LB.
+    use-forwarded-headers: "true"
+    proxy-body-size: "1m"
+    # Off by default in this chart, but be explicit: server tokens leak the
+    # exact nginx version to anything that can reach the private IP.
+    server-tokens: "false"
+
+  metrics:
+    # No Prometheus in this cluster — Container Insights scrapes container
+    # stdout/stats instead. Turn this on if you add a Prometheus stack.
+    enabled: false
+
+  admissionWebhooks:
+    enabled: true
+    patch:
+      nodeSelector:
+        nodepool-type: user
+
+defaultBackend:
+  # The app's own ingress has a catch-all "/" rule, so nothing ever falls
+  # through to a default backend. Skipping it saves a pod on a 2 vCPU node.
+  enabled: false
