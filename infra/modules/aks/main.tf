@@ -173,6 +173,25 @@ resource "azurerm_role_assignment" "jump_vm_aks_user" {
   principal_id         = var.jump_vm_principal_id
 }
 
+# ── RBAC: additional identities that need kubectl (e.g. the mgmt/bastion VM) ───
+# Separate from the jump_vm_* assignments above so adding one does not churn the
+# existing ones. Both roles are required together — see the variable's docs.
+resource "azurerm_role_assignment" "additional_aks_admin" {
+  for_each = toset(var.additional_admin_principal_ids)
+
+  scope                = azurerm_kubernetes_cluster.this.id
+  role_definition_name = "Azure Kubernetes Service RBAC Cluster Admin"
+  principal_id         = each.value
+}
+
+resource "azurerm_role_assignment" "additional_aks_user" {
+  for_each = toset(var.additional_admin_principal_ids)
+
+  scope                = azurerm_kubernetes_cluster.this.id
+  role_definition_name = "Azure Kubernetes Service Cluster User Role"
+  principal_id         = each.value
+}
+
 # ── RBAC: the Terraform operator (you) can run kubectl from your workstation ───
 # Azure RBAC for Kubernetes is enabled, so kubectl access needs an Azure role,
 # not just the kubeconfig. Set grant_operator_cluster_admin = false once you

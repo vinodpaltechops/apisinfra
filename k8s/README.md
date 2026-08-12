@@ -68,7 +68,39 @@ This works because the jump VNet (10.4.0.0/24, centralindia) is peered directly
 to the dev spoke, and the spoke NSG's `allow-mgmt-0` rule admits that range.
 Peering is non-transitive, which is exactly why that direct peering exists.
 
-To use `kubectl` interactively instead, SSH to the jump VM and
+### Running kubectl from the mgmt / jump VM
+
+**Always sign in with the managed identity, never interactively.** Entra
+security defaults block the device-code flow (`AADSTS530035: Access has been
+blocked by security defaults`), and neither VM has a browser for the redirect
+flow. `az login --identity` is exempt because no interactive user is involved.
+
+Both VMs already have `az`, `kubectl`, `helm` and `kubelogin` from cloud-init.
+
+```bash
+# laptop -> mgmt VM (SSH is restricted to mgmt_ssh_source_prefix)
+ssh azureadmin@<mgmt_vm_public_ip>
+
+az login --identity
+az aks get-credentials -g rg-spoke-dev-vinorg-001 -n aks-dev-lab-001 --overwrite-existing
+kubectl get nodes -o wide
+kubectl get pods -A -o wide
+```
+
+This needs the VM's identity to hold **both** AKS roles: `Cluster User Role`
+(the ARM permission to fetch the kubeconfig) and `RBAC Cluster Admin` (what
+Azure RBAC checks on each kubectl call). Missing the first fails at
+`get-credentials`; missing the second fails at the first kubectl call. The jump
+VM gets them from the aks module's `jump_vm_principal_id`; the mgmt VM gets them
+via `additional_admin_principal_ids`.
+
+Do **not** add these with `az role assignment create` — Terraform then fails
+with `RoleAssignmentExists` on the next apply. Let the pipeline create them.
+
+To reach the jump VM (no public IP) from the mgmt VM, forward your SSH agent:
+`ssh -A azureadmin@<mgmt_vm_public_ip>` then `ssh azureadmin@10.4.0.5`.
+
+Alternatively, SSH to the jump VM and
 `az aks get-credentials -g rg-spoke-dev-vinorg-001 -n aks-dev-lab-001` — its
 managed identity already holds cluster admin, and the hub DNS resolver answers
 the private API FQDN.
