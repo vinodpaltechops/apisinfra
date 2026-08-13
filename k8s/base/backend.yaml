@@ -123,12 +123,15 @@ spec:
       port: 8000
       targetPort: http
 ---
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: backend
-spec:
-  minAvailable: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: backend
+# DISABLED while the user node pool is a SINGLE node — see the explanation in
+# content-api.yaml. Re-enable together with the other two once the pool has 2+.
+#
+# apiVersion: policy/v1
+# kind: PodDisruptionBudget
+# metadata:
+#   name: backend
+# spec:
+#   minAvailable: 1
+#   selector:
+#     matchLabels:
+#       app.kubernetes.io/name: backend

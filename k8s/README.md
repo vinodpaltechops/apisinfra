@@ -193,6 +193,25 @@ The AKS control-plane identity needs Network Contributor on the spoke VNet to
 allocate an IP from `snet-aks-user-dev`; `infra/modules/aks` grants it. Also
 check the subnet name in `platform/ingress-nginx-values.yaml` still matches.
 
+**`terraform destroy` hangs ~30 min then `agentPools/delete` fails**
+A PodDisruptionBudget on pods pinned to the single-node user pool makes that
+node undrainable, and AKS drains a node pool before deleting it. The evicted
+replica has nowhere to reschedule (the system pool is tainted
+`CriticalAddonsOnly`), so it never goes Ready and the PDB never permits the
+next eviction. If the ACR has already been destroyed earlier in the teardown,
+the replacement is stuck in `ErrImagePull` too, so it can never resolve.
+
+This is why the app PDBs are commented out and ingress-nginx runs a single
+replica. If you hit it anyway — a leftover PDB, or you re-enabled them:
+
+```bash
+az aks command invoke -g rg-spoke-dev-vinorg-001 -n aks-dev-lab-001 \
+  --command "kubectl delete ns content-hub --wait=false; kubectl -n ingress-nginx delete pdb --all"
+```
+
+Then re-run the destroy. The same drain deadlock affects **node image and
+Kubernetes version upgrades**, so it is not only a teardown concern.
+
 **`az aks command invoke` returns a permissions error**
 See the authorisations section above — it is one of those two, not a network
 problem.
