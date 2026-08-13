@@ -55,9 +55,9 @@ variable "jump_vm_principal_id" {
   type        = string
 }
 
-variable "additional_admin_principal_ids" {
+variable "additional_admin_principals" {
   description = <<-EOT
-    Extra principal object IDs granted BOTH AKS roles needed to run kubectl:
+    Principals granted BOTH AKS roles needed to run kubectl:
     "Cluster User Role" (the ARM permission to fetch a kubeconfig) and "RBAC
     Cluster Admin" (the data-plane permission Azure RBAC then checks). One
     without the other fails — the first at `az aks get-credentials`, the second
@@ -67,9 +67,16 @@ variable "additional_admin_principal_ids" {
     `az login --identity` is the only workable sign-in: Entra security defaults
     block the device-code flow (AADSTS530035), and there is no browser for the
     interactive flow.
+
+    MAP, not a list, and the keys must be static strings such as "mgmt_vm" —
+    the principal IDs themselves come from managed identities and are unknown
+    until apply. for_each keys have to be known at PLAN time, so keying on the
+    IDs makes both plan and destroy fail with "Invalid for_each argument" as
+    soon as the VM providing the ID does not yet exist (or is being destroyed).
+    Static keys sidestep that: only the values are apply-time unknowns.
   EOT
-  type        = list(string)
-  default     = []
+  type        = map(string)
+  default     = {}
 }
 
 variable "kubernetes_version" {

@@ -243,7 +243,10 @@ module "aks" {
   # The mgmt VM is the bastion replacement, so it needs to actually run kubectl.
   # Its managed identity is the only usable sign-in there: it has no browser,
   # and Entra security defaults block `az login --use-device-code`.
-  additional_admin_principal_ids = [module.linux_vm_mgmt.vm_principal_id]
+  # The "mgmt_vm" key must stay a literal — see the variable's docs.
+  additional_admin_principals = {
+    mgmt_vm = module.linux_vm_mgmt.vm_principal_id
+  }
 
   grant_operator_cluster_admin = true # lab: allow kubectl from your workstation
 }

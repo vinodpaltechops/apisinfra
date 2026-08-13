@@ -38,10 +38,18 @@ variable "kubelet_identity_object_id" {
   type        = string
 }
 
-variable "push_principal_ids" {
-  description = "Extra principal object IDs granted AcrPush (scoped CI identities, build VMs). The root-MG Owner SP already has push rights and does not need listing."
-  type        = list(string)
-  default     = []
+variable "push_principals" {
+  description = <<-EOT
+    Principals granted AcrPush (scoped CI identities, build VMs). The root-MG
+    Owner SP already has push rights and does not need listing.
+
+    MAP with static keys (e.g. { build_vm = <principal id> }), not a list: a
+    principal ID sourced from a managed identity is unknown until apply, and
+    for_each keys must be known at plan time — keying on the ID itself breaks
+    plan and destroy with "Invalid for_each argument".
+  EOT
+  type        = map(string)
+  default     = {}
 }
 
 variable "tags" {

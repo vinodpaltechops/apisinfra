@@ -176,8 +176,11 @@ resource "azurerm_role_assignment" "jump_vm_aks_user" {
 # ── RBAC: additional identities that need kubectl (e.g. the mgmt/bastion VM) ───
 # Separate from the jump_vm_* assignments above so adding one does not churn the
 # existing ones. Both roles are required together — see the variable's docs.
+# Keyed by the map's static labels (e.g. "mgmt_vm"), never by the principal ID:
+# the IDs are managed-identity attributes that are unknown until apply, and
+# for_each keys must be known at plan time.
 resource "azurerm_role_assignment" "additional_aks_admin" {
-  for_each = toset(var.additional_admin_principal_ids)
+  for_each = var.additional_admin_principals
 
   scope                = azurerm_kubernetes_cluster.this.id
   role_definition_name = "Azure Kubernetes Service RBAC Cluster Admin"
@@ -185,7 +188,7 @@ resource "azurerm_role_assignment" "additional_aks_admin" {
 }
 
 resource "azurerm_role_assignment" "additional_aks_user" {
-  for_each = toset(var.additional_admin_principal_ids)
+  for_each = var.additional_admin_principals
 
   scope                = azurerm_kubernetes_cluster.this.id
   role_definition_name = "Azure Kubernetes Service Cluster User Role"
