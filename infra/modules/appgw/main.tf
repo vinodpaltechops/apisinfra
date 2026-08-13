@@ -195,6 +195,17 @@ resource "azurerm_application_gateway" "this" {
 
   firewall_policy_id = azurerm_web_application_firewall_policy.appgw.id
 
+  # MANDATORY. Left unset, Azure applies the 2015 default policy, which permits
+  # TLS 1.0/1.1, and then refuses to create the gateway:
+  #   ApplicationGatewayDeprecatedTlsVersionUsedInSslPolicy
+  #
+  # Note this applies even to an HTTP-only gateway — the policy is gateway-wide,
+  # not per-listener, so it is validated whether or not a TLS listener exists.
+  ssl_policy {
+    policy_type = "Predefined"
+    policy_name = var.ssl_policy_name
+  }
+
   gateway_ip_configuration {
     name      = "gwip"
     subnet_id = azurerm_subnet.appgw.id

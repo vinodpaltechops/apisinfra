@@ -81,6 +81,32 @@ variable "max_capacity" {
   default = 2
 }
 
+variable "ssl_policy_name" {
+  description = <<-EOT
+    Predefined TLS policy for the gateway. Must be set — Azure's implicit
+    default (AppGwSslPolicy20150501) allows TLS 1.0/1.1 and is now rejected
+    outright with ApplicationGatewayDeprecatedTlsVersionUsedInSslPolicy.
+
+    Only two current options enforce a TLS 1.2 floor:
+      AppGwSslPolicy20220101   broad cipher set  (default — widest client support)
+      AppGwSslPolicy20220101S  stricter ciphers, ECDHE/AEAD only
+
+    Every current browser works with either. Prefer the S variant unless you
+    have a client that fails the handshake.
+  EOT
+  type        = string
+  default     = "AppGwSslPolicy20220101"
+
+  validation {
+    condition = contains([
+      "AppGwSslPolicy20170401S",
+      "AppGwSslPolicy20220101",
+      "AppGwSslPolicy20220101S",
+    ], var.ssl_policy_name)
+    error_message = "Use a TLS 1.2+ policy: AppGwSslPolicy20220101, AppGwSslPolicy20220101S or AppGwSslPolicy20170401S. The older 20150501/20170401 policies allow TLS 1.0/1.1 and Azure rejects them."
+  }
+}
+
 variable "ssl_certificate_key_vault_secret_id" {
   description = <<-EOT
     Key Vault SECRET id of the certificate (not the certificate id) — the
