@@ -23,7 +23,15 @@ controller:
     controllerValue: "k8s.io/ingress-nginx-internal"
   ingressClass: nginx-internal
 
-  replicaCount: 2
+  # ONE replica, deliberately. The chart auto-creates a PodDisruptionBudget as
+  # soon as replicaCount > 1, and a PDB on a single-node pool makes that node
+  # undrainable (see k8s/base/content-api.yaml for the full mechanism) — it
+  # blocks node pool deletion and AKS upgrades alike.
+  #
+  # Two replicas bought nothing here anyway: both landed on the same node, so
+  # they shared its fate. Raise this to 2 when the user pool has 2+ nodes, and
+  # re-enable the app PDBs at the same time.
+  replicaCount: 1
 
   service:
     annotations:

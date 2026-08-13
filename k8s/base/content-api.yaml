@@ -117,12 +117,24 @@ spec:
       port: 8000
       targetPort: http
 ---
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: content-api
-spec:
-  minAvailable: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: content-api
+# DISABLED while the user node pool is a SINGLE node. Re-enable once it has 2+.
+#
+# A PDB plus `nodeSelector: nodepool-type: user` on a one-node pool makes that
+# node impossible to drain: eviction of one replica is allowed, the replacement
+# has nowhere to schedule (the system pool is tainted CriticalAddonsOnly), so it
+# never becomes Ready, so the PDB never permits the next eviction. The drain
+# blocks until it times out.
+#
+# That breaks far more than teardown — AKS node image upgrades and Kubernetes
+# version upgrades both drain nodes. Observed for real: `agentPools/delete` ran
+# 30 minutes and failed with these in place.
+#
+# apiVersion: policy/v1
+# kind: PodDisruptionBudget
+# metadata:
+#   name: content-api
+# spec:
+#   minAvailable: 1
+#   selector:
+#     matchLabels:
+#       app.kubernetes.io/name: content-api
