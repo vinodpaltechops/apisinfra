@@ -56,8 +56,9 @@ resource "azurerm_role_assignment" "kubelet_acr_pull" {
 # The deploy service principal already holds Owner at the root management group,
 # which covers ACR push. This variable exists for principals that do NOT — e.g.
 # a scoped-down build identity, or the jump VM if you build images on it.
+# Keyed by the map's static labels — see the variable's docs for why not the IDs.
 resource "azurerm_role_assignment" "acr_push" {
-  for_each = toset(var.push_principal_ids)
+  for_each = var.push_principals
 
   scope                            = azurerm_container_registry.this.id
   role_definition_name             = "AcrPush"
