@@ -44,6 +44,25 @@ locals {
   # TLS is optional so the gateway can be stood up and proven over HTTP before
   # a certificate exists. Supply the Key Vault secret ID to switch it on.
   tls_enabled = var.ssl_certificate_key_vault_secret_id != null
+
+  # Azure splits the source of an NSG rule across two mutually exclusive fields:
+  #   source_address_prefix  (singular) — ONE value, and the only one that
+  #                                       accepts service tags (Internet,
+  #                                       VirtualNetwork, ...) or "*"
+  #   source_address_prefixes (plural)  — a list, real CIDRs/IPs ONLY
+  #
+  # Putting a service tag in the plural form is rejected at apply time, not at
+  # plan time:
+  #   SecurityRuleParameterContainsUnsupportedValue: ... cannot specify
+  #   existing VIRTUALNETWORK, INTERNET, AZURELOADBALANCER, '*' or system tags
+  #
+  # So detect which form the caller gave us. A single entry that is not parseable
+  # as a CIDR is treated as a service tag and routed to the singular field;
+  # anything else goes to the plural list.
+  web_source_tag = (
+    length(var.allowed_source_prefixes) == 1 &&
+    !can(cidrhost(var.allowed_source_prefixes[0], 0))
+  ) ? var.allowed_source_prefixes[0] : null
 }
 
 # ── Subnet — App Gateway v2 requires a DEDICATED subnet ───────────────────────
@@ -92,15 +111,17 @@ resource "azurerm_network_security_group" "appgw" {
     destination_port_range     = "*"
   }
 
-  # The actual public traffic. Narrow source_address_prefixes to your own IP
+  # The actual public traffic. Narrow allowed_source_prefixes to your own IP
   # while testing if you would rather not be internet-facing straight away.
+  # Exactly one of the two source fields is set — see local.web_source_tag.
   security_rule {
     name                       = "allow-web-inbound"
     priority                   = 200
     direction                  = "Inbound"
     access                     = "Allow"
     protocol                   = "Tcp"
-    source_address_prefixes    = var.allowed_source_prefixes
+    source_address_prefix      = local.web_source_tag
+    source_address_prefixes    = local.web_source_tag == null ? var.allowed_source_prefixes : null
     source_port_range          = "*"
     destination_address_prefix = "*"
     destination_port_ranges    = ["80", "443"]

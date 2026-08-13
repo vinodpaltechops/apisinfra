@@ -37,9 +37,26 @@ variable "ingress_internal_ip" {
 }
 
 variable "allowed_source_prefixes" {
-  description = "Source CIDRs allowed to reach ports 80/443. Defaults to the whole internet, which is the point of a public gateway; narrow it to your own IP while testing."
+  description = <<-EOT
+    Who may reach ports 80/443.
+
+    Either a single service tag — ["Internet"] (default), which is the point of
+    a public gateway — or a list of real CIDRs, e.g. ["163.223.165.0/24"], to
+    keep it private while testing. Do not mix the two: Azure accepts a service
+    tag only in the singular source_address_prefix field, so a list containing
+    both a tag and a CIDR cannot be expressed and will be rejected at apply
+    time. The module picks the correct field for you.
+  EOT
   type        = list(string)
   default     = ["Internet"]
+
+  validation {
+    condition = (
+      length(var.allowed_source_prefixes) == 1 ||
+      alltrue([for p in var.allowed_source_prefixes : can(cidrhost(p, 0))])
+    )
+    error_message = "Use either a single service tag (e.g. [\"Internet\"]) or a list of valid CIDRs — not a mixture."
+  }
 }
 
 variable "waf_mode" {
