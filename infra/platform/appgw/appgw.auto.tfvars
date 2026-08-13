@@ -7,7 +7,7 @@ app_fqdn = "app.sometestdemo.in"
 
 # Must match service.beta.kubernetes.io/azure-load-balancer-ipv4 in
 # k8s/platform/ingress-nginx-values.yaml.
-ingress_internal_ip = "10.1.2.5"
+ingress_internal_ip = "10.1.2.250"
 
 waf_mode = "Prevention"
 
