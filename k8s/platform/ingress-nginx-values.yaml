@@ -40,6 +40,15 @@ controller:
       # the subnet of the first node pool, which happens to be the same here —
       # but relying on that is how a subnet change silently moves your VIP.
       service.beta.kubernetes.io/azure-load-balancer-internal-subnet: "snet-aks-user-dev"
+      # STATIC private VIP. Application Gateway's backend pool points at this
+      # literal address (infra/platform/appgw), so it must not change when the
+      # Service is recreated — a dynamically assigned VIP would silently leave
+      # the gateway pointing at nothing after any teardown/rebuild.
+      #
+      # Chosen high in snet-aks-user-dev (10.1.2.0/24) to stay clear of node
+      # IPs, which Azure hands out from the bottom (.4, .5, ...). Keep this in
+      # sync with ingress_internal_ip in infra/platform/appgw.
+      service.beta.kubernetes.io/azure-load-balancer-ipv4: "10.1.2.250"
     externalTrafficPolicy: Local # preserves the client IP in access logs
 
   # Both replicas land on the single user node today; keep it soft so the

@@ -81,7 +81,8 @@ resource "azurerm_storage_container" "layers" {
     "private-endpoints",
     "keyvault",
     "firewall",
-    "policies-dine"
+    "policies-dine",
+    "appgw"
   ])
 
   name                  = each.key
