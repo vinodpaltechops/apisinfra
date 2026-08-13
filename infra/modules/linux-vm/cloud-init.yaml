@@ -1,5 +1,17 @@
 #cloud-config
-# Installs az CLI, kubectl, helm (and kubelogin) on first boot.
+# Installs az CLI, kubectl, helm and kubelogin on first boot.
+#
+# Everything runs as ONE script rather than a list of runcmd entries, because
+# the Azure CLI installer shells out to apt-get and used to race
+# unattended-upgrades for the dpkg lock:
+#
+#   E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process ...
+#   /var/lib/cloud/instance/scripts/runcmd: 7: az: not found
+#
+# cloud-init still reported "status: done, errors: []" — a runcmd list does not
+# abort on a failed entry — so the VM looked fine until someone typed `az`.
+# The script below stops the competing timers, waits for the lock, retries, and
+# leaves evidence behind either way.
 package_update: true
 package_upgrade: false
 packages:
@@ -9,14 +21,86 @@ packages:
   - gnupg
   - lsb-release
 
+write_files:
+  - path: /usr/local/sbin/install-tools.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      # Logs to /var/log/install-tools.log; drops /etc/tools-ready on success.
+      exec > >(tee -a /var/log/install-tools.log) 2>&1
+      set -x
+      export DEBIAN_FRONTEND=noninteractive
+
+      # These fire on first boot and hold the dpkg lock for minutes. Stop them
+      # for the duration; the daily timer re-arms them after reboot.
+      systemctl stop unattended-upgrades.service 2>/dev/null || true
+      systemctl stop apt-daily.service apt-daily-upgrade.service 2>/dev/null || true
+
+      wait_for_apt() {
+        for _ in $(seq 1 120); do   # up to 10 minutes
+          if ! fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock \
+                     /var/lib/dpkg/lock >/dev/null 2>&1; then
+            return 0
+          fi
+          sleep 5
+        done
+        echo "WARNING: apt/dpkg lock still held after 10 minutes"
+        return 1
+      }
+
+      retry() {   # retry <attempts> <command...>
+        local n=$1; shift
+        for i in $(seq 1 "$n"); do
+          "$@" && return 0
+          echo "attempt $i/$n failed: $*"
+          sleep 10
+        done
+        return 1
+      }
+
+      # ── Azure CLI ────────────────────────────────────────────────────────────
+      wait_for_apt
+      retry 3 bash -c 'curl -sL https://aka.ms/InstallAzureCLIDeb | bash' \
+        || echo "ERROR: azure-cli install failed"
+
+      # ── kubectl ──────────────────────────────────────────────────────────────
+      KVER=$(curl -Ls https://dl.k8s.io/release/stable.txt)
+      retry 3 curl -fLo /tmp/kubectl \
+        "https://dl.k8s.io/release/${KVER}/bin/linux/amd64/kubectl" \
+        && install -o root -g root -m 0755 /tmp/kubectl /usr/local/bin/kubectl \
+        && rm -f /tmp/kubectl \
+        || echo "ERROR: kubectl install failed"
+
+      # ── helm 3 ───────────────────────────────────────────────────────────────
+      retry 3 bash -c \
+        'curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash' \
+        || echo "ERROR: helm install failed"
+
+      # ── kubelogin — needs az on PATH, so it must come last ───────────────────
+      if command -v az >/dev/null 2>&1; then
+        retry 3 az aks install-cli || echo "ERROR: kubelogin install failed"
+      else
+        echo "ERROR: skipping kubelogin — az is not installed"
+      fi
+
+      # ── Report ───────────────────────────────────────────────────────────────
+      missing=0
+      for t in az kubectl helm kubelogin; do
+        if command -v "$t" >/dev/null 2>&1; then
+          echo "OK      $t -> $(command -v "$t")"
+        else
+          echo "MISSING $t"
+          missing=1
+        fi
+      done
+
+      systemctl start unattended-upgrades.service 2>/dev/null || true
+
+      # Marker so `ls /etc/tools-ready` answers "did provisioning work?" without
+      # reading logs. Absent = something above failed.
+      if [ "$missing" -eq 0 ]; then
+        date -Is > /etc/tools-ready
+      fi
+
 runcmd:
-  # Azure CLI
-  - curl -sL https://aka.ms/InstallAzureCLIDeb | bash
-  # kubectl (latest stable)
-  - curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-  - install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
-  - rm -f kubectl
-  # helm 3
-  - curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-  # kubelogin (AAD-integrated AKS auth) — best-effort
-  - az aks install-cli || true
+  - /usr/local/sbin/install-tools.sh

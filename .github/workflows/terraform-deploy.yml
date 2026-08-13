@@ -72,3 +72,15 @@ jobs:
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/landing-zones/dev, apply: true }
     secrets: inherit
+
+  # 5) Application Gateway (WAF) — the public entry point. Last, because it
+  #    forwards to the dev spoke's internal ingress LB.
+  #
+  #    It does not read dev's state (the ingress VIP is pinned to a static
+  #    address), so applying it before the app exists is harmless — the backend
+  #    simply reports Unhealthy until ingress-nginx is running.
+  appgw:
+    needs: dev
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/appgw, apply: true }
+    secrets: inherit

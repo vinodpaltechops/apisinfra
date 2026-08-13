@@ -3,8 +3,8 @@
 # Destroy layers ONE BY ONE in the REVERSE of the deploy order, so each layer's
 # dependency still exists (in state) while it is destroyed:
 #
-#   deploy :  management-groups → policies → connectivity (hub) → dev
-#   destroy:  dev → connectivity (hub) → policies → management-groups
+#   deploy :  management-groups → policies → connectivity (hub) → dev → appgw
+#   destroy:  appgw → dev → connectivity (hub) → policies → management-groups
 #
 # The `needs:` chain forces sequential execution (no two layers at once). Using
 # `terraform destroy` keeps state consistent — unlike deleting from the portal,
@@ -40,9 +40,18 @@ jobs:
           fi
           echo "Confirmed — destroying layers one by one, in reverse order."
 
-  # 1) Dev landing zone (destroyed first — nothing depends on it)
-  dev:
+  # 1) Application Gateway — destroyed FIRST: it is the outermost layer and
+  #    holds a subnet inside the hub VNet, which connectivity cannot delete
+  #    while that subnet is still in use.
+  appgw:
     needs: guard
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/appgw, destroy: true }
+    secrets: inherit
+
+  # 2) Dev landing zone
+  dev:
+    needs: appgw
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/landing-zones/dev, destroy: true }
     secrets: inherit
