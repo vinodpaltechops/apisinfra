@@ -41,9 +41,32 @@ locals {
   ssl_cert_name       = "cert-app"
   redirect_name       = "redirect-to-https"
 
-  # TLS is optional so the gateway can be stood up and proven over HTTP before
-  # a certificate exists. Supply the Key Vault secret ID to switch it on.
-  tls_enabled = var.ssl_certificate_key_vault_secret_id != null
+  # ── TLS switch ──────────────────────────────────────────────────────────────
+  # enable_https = false → ONE listener on :80 serving the app. This is a
+  #                        complete, working configuration, not a broken one.
+  # enable_https = true  → a :443 listener plus, depending on
+  #                        http_redirect_to_https, either a 301 on :80 or :80
+  #                        continuing to serve the app alongside :443.
+  #
+  # Flipping the flag back and forth is non-destructive: it only adds/removes
+  # listeners and rules on the existing gateway, so the public IP and therefore
+  # the DNS record are untouched.
+  tls_enabled = var.enable_https
+
+  # Where the certificate comes from. Exactly one is used, enforced by the
+  # variable validation in variables.tf:
+  #   pfx        — Terraform uploads the PFX inline (no Key Vault involved)
+  #   key_vault  — the gateway reads it from Key Vault at runtime
+  cert_from_pfx       = var.enable_https && var.ssl_certificate_pfx_path != null
+  cert_from_key_vault = var.enable_https && var.ssl_certificate_key_vault_secret_id != null
+
+  # The identity exists only to read the certificate out of Key Vault, so it is
+  # pointless in the inline-PFX case.
+  create_identity = local.cert_from_key_vault
+
+  # :80 serves the app whenever HTTPS is off, or when HTTPS is on but the
+  # caller explicitly asked to keep plain HTTP working alongside it.
+  http_serves_app = !local.tls_enabled || !var.http_redirect_to_https
 
   # Azure splits the source of an NSG rule across two mutually exclusive fields:
   #   source_address_prefix  (singular) — ONE value, and the only one that
@@ -143,6 +166,32 @@ resource "azurerm_public_ip" "appgw" {
   allocation_method   = "Static"
   sku                 = "Standard"
   tags                = var.tags
+}
+
+# ── Identity for reading the certificate from Key Vault ───────────────────────
+# Created here rather than asked for as an input: it exists solely to serve this
+# gateway, and creating it in the module means the role assignment below is
+# managed too. Hand-creating either with `az` and ALSO letting Terraform create
+# it fails the next apply with RoleAssignmentExists.
+#
+# Not created for the inline-PFX source — there is no vault to read from.
+resource "azurerm_user_assigned_identity" "appgw" {
+  count               = local.create_identity ? 1 : 0
+  name                = "id-${local.name}"
+  resource_group_name = var.hub_resource_group_name
+  location            = var.location
+  tags                = var.tags
+}
+
+# The vault uses RBAC (enable_rbac_authorization = true), so this is the whole
+# grant — there is no access policy to add as well. Secrets User is sufficient:
+# App Gateway fetches the certificate through the SECRET endpoint, which is why
+# the input is a secret ID rather than a certificate ID.
+resource "azurerm_role_assignment" "appgw_kv_secrets" {
+  count                = local.create_identity ? 1 : 0
+  scope                = var.key_vault_id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = azurerm_user_assigned_identity.appgw[0].principal_id
 }
 
 # ── WAF policy ────────────────────────────────────────────────────────────────
@@ -286,29 +335,47 @@ resource "azurerm_application_gateway" "this" {
     }
   }
 
-  # Certificate is read from Key Vault at runtime via the user-assigned
-  # identity, so the PFX never lands in Terraform state.
+  # Two mutually exclusive sources — see the variables for the trade-off.
+  # Key Vault: fetched at runtime via the identity below; the private key never
+  # enters Terraform state.
   dynamic "ssl_certificate" {
-    for_each = local.tls_enabled ? [1] : []
+    for_each = local.cert_from_key_vault ? [1] : []
     content {
       name                = local.ssl_cert_name
       key_vault_secret_id = var.ssl_certificate_key_vault_secret_id
     }
   }
 
+  # Inline PFX: no vault and no identity needed, so this works from a runner
+  # with no route to a private Key Vault. The PFX does land in state.
+  dynamic "ssl_certificate" {
+    for_each = local.cert_from_pfx ? [1] : []
+    content {
+      name     = local.ssl_cert_name
+      data     = filebase64(var.ssl_certificate_pfx_path)
+      password = var.ssl_certificate_pfx_password
+    }
+  }
+
   dynamic "identity" {
-    for_each = var.identity_id != null ? [1] : []
+    for_each = local.create_identity ? [1] : []
     content {
       type         = "UserAssigned"
-      identity_ids = [var.identity_id]
+      identity_ids = [azurerm_user_assigned_identity.appgw[0].id]
     }
   }
 
   # ── Routing ────────────────────────────────────────────────────────────────
-  # With TLS off: HTTP goes straight to the backend.
-  # With TLS on:  HTTP permanently redirects to HTTPS, HTTPS serves the app.
+  # Three supported shapes, driven entirely by the two toggles:
+  #
+  #   enable_https=false                   :80 → app
+  #   enable_https=true,  redirect=true    :80 → 301 → :443 → app   (default)
+  #   enable_https=true,  redirect=false   :80 → app, :443 → app    (both work)
+  #
+  # The redirect_configuration only exists in the middle case; in the third,
+  # :80 keeps its own rule to the backend pool.
   dynamic "redirect_configuration" {
-    for_each = local.tls_enabled ? [1] : []
+    for_each = local.tls_enabled && var.http_redirect_to_https ? [1] : []
     content {
       name                 = local.redirect_name
       redirect_type        = "Permanent"
@@ -318,16 +385,18 @@ resource "azurerm_application_gateway" "this" {
     }
   }
 
+  # :80 — serves the app, or redirects, but never both.
   request_routing_rule {
     name                        = "rule-http"
     priority                    = 100 # required on v2 SKUs
     rule_type                   = "Basic"
     http_listener_name          = local.listener_http
-    backend_address_pool_name   = local.tls_enabled ? null : local.backend_pool
-    backend_http_settings_name  = local.tls_enabled ? null : local.backend_setting
-    redirect_configuration_name = local.tls_enabled ? local.redirect_name : null
+    backend_address_pool_name   = local.http_serves_app ? local.backend_pool : null
+    backend_http_settings_name  = local.http_serves_app ? local.backend_setting : null
+    redirect_configuration_name = local.http_serves_app ? null : local.redirect_name
   }
 
+  # :443 — only exists when TLS is on.
   dynamic "request_routing_rule" {
     for_each = local.tls_enabled ? [1] : []
     content {
@@ -341,4 +410,25 @@ resource "azurerm_application_gateway" "this" {
   }
 
   depends_on = [azurerm_subnet_network_security_group_association.appgw]
+
+  lifecycle {
+    # Cross-variable checks — a variable validation block can only see its own
+    # variable, so the "exactly one certificate source" rule lives here. These
+    # fail at PLAN time, which is the whole point: the alternative is finding
+    # out 20 minutes into an apply.
+    precondition {
+      condition     = !var.enable_https || local.cert_from_pfx != local.cert_from_key_vault
+      error_message = "enable_https = true needs exactly ONE certificate source: either ssl_certificate_pfx_path or ssl_certificate_key_vault_secret_id, not both and not neither."
+    }
+
+    precondition {
+      condition     = !local.cert_from_key_vault || var.key_vault_id != null
+      error_message = "ssl_certificate_key_vault_secret_id requires key_vault_id — the module needs the vault's resource ID to grant its identity Key Vault Secrets User."
+    }
+
+    precondition {
+      condition     = !local.cert_from_pfx || var.ssl_certificate_pfx_password != null
+      error_message = "ssl_certificate_pfx_path requires ssl_certificate_pfx_password. Pass \"\" if the PFX was exported without a password."
+    }
+  }
 }

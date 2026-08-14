@@ -10,22 +10,30 @@ output "spoke_subnet_ids" {
   value = module.spoke_network.subnet_ids
 }
 
-output "vm_private_ip" {
-  value = module.linux_vm.vm_private_ip
-}
+# Jump-VM outputs — disabled together with module "linux_vm" in main.tf.
+# Re-enable both at once; a commented-out module leaves these dangling and
+# `terraform validate` fails with "Reference to undeclared module".
+# output "vm_private_ip" {
+#   value = module.linux_vm.vm_private_ip
+# }
+#
+# output "vm_identity_principal_id" {
+#   value = module.linux_vm.vm_principal_id
+# }
+#
+# output "ssh_command" {
+#   description = "SSH into the jump VM via Azure AD (run from your laptop)."
+#   value       = module.linux_vm.ssh_command
+# }
 
 output "mgmt_vm_public_ip" {
   description = "Public IP of the mgmt/bastion-replacement VM — SSH here as azureadmin."
   value       = module.linux_vm_mgmt.public_ip
 }
 
-output "vm_identity_principal_id" {
-  value = module.linux_vm.vm_principal_id
-}
-
-output "ssh_command" {
-  description = "SSH into the jump VM via Azure AD (run from your laptop)."
-  value       = module.linux_vm.ssh_command
+output "mgmt_vm_identity_principal_id" {
+  description = "Managed identity of the mgmt VM — holds Key Vault Secrets User and, via the aks module, cluster admin."
+  value       = module.linux_vm_mgmt.vm_principal_id
 }
 
 output "key_vault_uri" {

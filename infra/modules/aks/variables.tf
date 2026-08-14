@@ -51,8 +51,18 @@ variable "law_id" {
 }
 
 variable "jump_vm_principal_id" {
-  description = "Jump VM managed identity — granted AKS cluster admin/user."
+  description = <<-EOT
+    Jump VM managed identity — granted AKS cluster admin/user.
+
+    null (default) when there is no jump VM, so the landing zone can comment
+    that module out without leaving a dangling reference here.
+
+    Do NOT pass a principal that is also in additional_admin_principals: both
+    grant the same two roles at the same scope, and Azure rejects the duplicate
+    with RoleAssignmentExists.
+  EOT
   type        = string
+  default     = null
 }
 
 variable "additional_admin_principals" {

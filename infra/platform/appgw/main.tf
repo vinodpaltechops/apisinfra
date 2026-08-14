@@ -77,10 +77,29 @@ module "appgw" {
   waf_mode                = var.waf_mode
   allowed_source_prefixes = var.allowed_source_prefixes
 
-  # TLS stays off until a certificate exists in Key Vault — see the runbook in
-  # docs/public-endpoint.md. Both must be supplied together.
+  # ── TLS ─────────────────────────────────────────────────────────────────────
+  # enable_https = false → :80 serves the app. A complete configuration, not a
+  #                        half-built one; the gateway needs no certificate.
+  # enable_https = true  → :443 serves it, and :80 either redirects there or
+  #                        keeps serving too (http_redirect_to_https).
+  #
+  # Flipping this only adds/removes listeners and routing rules on the existing
+  # gateway. The public IP is untouched, so the GoDaddy A record stays valid
+  # either way.
+  enable_https           = var.enable_https
+  http_redirect_to_https = var.http_redirect_to_https
+
+  # Certificate source — exactly one when enable_https = true.
+  # The module creates its own managed identity and grants it Key Vault Secrets
+  # User, so there is no manual `az identity create` / `az role assignment`.
+  # Getting the certificate INTO the vault stays a manual step (see
+  # docs/public-endpoint.md) — no Terraform resource can complete a CA's domain
+  # ownership challenge.
   ssl_certificate_key_vault_secret_id = var.ssl_certificate_key_vault_secret_id
-  identity_id                         = var.appgw_identity_id
+  key_vault_id                        = var.key_vault_id
+
+  ssl_certificate_pfx_path     = var.ssl_certificate_pfx_path
+  ssl_certificate_pfx_password = var.ssl_certificate_pfx_password
 
   tags = local.tags
 }
