@@ -161,17 +161,40 @@ Let's Encrypt certificates last 90 days. For anything long-lived, either
 automate renewal or buy a longer-lived certificate — an expired certificate
 takes the site down exactly as hard as a broken backend.
 
-### 6b. Import it into Key Vault
+### 6b. Import it into Key Vault — from inside the VNet
 
-The dev landing zone's Key Vault is behind a private endpoint, so import from
-the mgmt VM (or temporarily allow your IP through its firewall):
+The dev Key Vault has `public_network_access_enabled = false`, so its data
+plane is reachable **only** through the private endpoint. Note the `ip_rules`
+in the module are inert while public access is off, so "allow my laptop's IP"
+is not an available shortcut — the import has to run from a machine in the
+VNet. The mgmt VM is that machine.
+
+Copy the PFX up, then import from there:
 
 ```bash
+scp app.pfx azureadmin@<mgmt_vm_public_ip>:~
+ssh azureadmin@<mgmt_vm_public_ip>
+```
+
+The vault uses RBAC (`enable_rbac_authorization = true`), so subscription Owner
+alone does **not** grant data-plane rights — importing a certificate needs an
+explicit role. Grant it to yourself once:
+
+```bash
+az login --identity          # or your own account
+VAULT_ID=$(az keyvault show -n kv-dev-lab-<suffix> --query id -o tsv)
+az role assignment create --assignee <your-object-id> \
+  --role "Key Vault Certificates Officer" --scope "$VAULT_ID"
+
 az keyvault certificate import \
   --vault-name kv-dev-lab-<suffix> \
   --name app-tls \
   --file app.pfx
 ```
+
+Do not create the gateway's own role assignment this way — Terraform creates
+that one (6c), and a manual duplicate makes the next apply fail with
+`RoleAssignmentExists`.
 
 ### 6c. Give the gateway an identity that can read it
 
