@@ -150,20 +150,20 @@ module "peering_jump" {
 }
 
 # ── Linux jump VM (in centralindia, reachable over the global peering) ─────────
-module "linux_vm" {
-  source = "../../modules/linux-vm"
+# module "linux_vm" {
+#   source = "../../modules/linux-vm"
 
-  env                 = local.env
-  resource_group_name = module.spoke_network.resource_group_name
-  location            = local.jump_location
-  subnet_id           = module.jump_network.subnet_id
-  ssh_public_key      = var.ssh_public_key
-  tags                = local.tags
+#   env                 = local.env
+#   resource_group_name = module.spoke_network.resource_group_name
+#   location            = local.jump_location
+#   subnet_id           = module.jump_network.subnet_id
+#   ssh_public_key      = var.ssh_public_key
+#   tags                = local.tags
 
-  # Bring peering (hub DNS reachability) up before the VM boots so cloud-init
-  # can resolve + download via the hub resolver and the jump NAT gateway.
-  depends_on = [module.peering_jump]
-}
+#   # Bring peering (hub DNS reachability) up before the VM boots so cloud-init
+#   # can resolve + download via the hub resolver and the jump NAT gateway.
+#   depends_on = [module.peering_jump]
+# }
 
 # ── Public mgmt VM (bastion replacement) — centralindia, same jump VNet ────────
 # Free-tier substitute for Azure Bastion. Lives in centralindia because
@@ -219,23 +219,29 @@ module "keyvault" {
   location                  = var.location
   subnet_id                 = module.spoke_network.data_subnet_id
   vault_private_dns_zone_id = local.vault_dns_zone_id
-  vm_identity_principal_id  = module.linux_vm.vm_principal_id
-  allowed_ip_rules          = var.allowed_ip_rules
-  tags                      = local.tags
+  # Was the jump VM; that module is commented out, so the mgmt VM is the only
+  # VM left and is the one that needs to read secrets.
+  vm_identity_principal_id = module.linux_vm_mgmt.vm_principal_id
+  allowed_ip_rules         = var.allowed_ip_rules
+  tags                     = local.tags
 }
 
 # ── AKS cluster (private, into the reserved snet-aks-* subnets) ────────────────
 module "aks" {
   source = "../../modules/aks"
 
-  env                     = local.env
-  location                = var.location
-  resource_group_name     = module.spoke_network.resource_group_name
-  system_subnet_id        = module.spoke_network.subnet_ids["snet-aks-system-${local.env}"]
-  user_subnet_id          = module.spoke_network.subnet_ids["snet-aks-user-${local.env}"]
-  spoke_vnet_id           = module.spoke_network.vnet_id
-  law_id                  = local.hub_law_id
-  jump_vm_principal_id    = module.linux_vm.vm_principal_id
+  env                 = local.env
+  location            = var.location
+  resource_group_name = module.spoke_network.resource_group_name
+  system_subnet_id    = module.spoke_network.subnet_ids["snet-aks-system-${local.env}"]
+  user_subnet_id      = module.spoke_network.subnet_ids["snet-aks-user-${local.env}"]
+  spoke_vnet_id       = module.spoke_network.vnet_id
+  law_id              = local.hub_law_id
+  # jump_vm_principal_id is omitted (null) while module "linux_vm" is commented
+  # out. Do not point it at the mgmt VM — that principal is already granted the
+  # same two roles via additional_admin_principals below, and a second
+  # assignment at the same scope fails with RoleAssignmentExists.
+  # jump_vm_principal_id  = module.linux_vm.vm_principal_id
   aks_private_dns_zone_id = local.aks_dns_zone_id
   pod_cidr                = local.aks_pod_cidr # same value the spoke NSG allows
   tags                    = local.tags

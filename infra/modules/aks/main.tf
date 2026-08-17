@@ -162,12 +162,14 @@ resource "azurerm_kubernetes_cluster_node_pool" "user" {
 
 # ── RBAC: jump VM identity can run kubectl against the private cluster ─────────
 resource "azurerm_role_assignment" "jump_vm_aks_admin" {
+  count                = var.jump_vm_principal_id == null ? 0 : 1
   scope                = azurerm_kubernetes_cluster.this.id
   role_definition_name = "Azure Kubernetes Service RBAC Cluster Admin"
   principal_id         = var.jump_vm_principal_id
 }
 
 resource "azurerm_role_assignment" "jump_vm_aks_user" {
+  count                = var.jump_vm_principal_id == null ? 0 : 1
   scope                = azurerm_kubernetes_cluster.this.id
   role_definition_name = "Azure Kubernetes Service Cluster User Role"
   principal_id         = var.jump_vm_principal_id

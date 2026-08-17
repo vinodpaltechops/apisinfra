@@ -161,54 +161,108 @@ Let's Encrypt certificates last 90 days. For anything long-lived, either
 automate renewal or buy a longer-lived certificate — an expired certificate
 takes the site down exactly as hard as a broken backend.
 
-### 6b. Import it into Key Vault
+### 6b. Import it into Key Vault — from inside the VNet
 
-The dev landing zone's Key Vault is behind a private endpoint, so import from
-the mgmt VM (or temporarily allow your IP through its firewall):
+The dev Key Vault has `public_network_access_enabled = false`, so its data
+plane is reachable **only** through the private endpoint. Note the `ip_rules`
+in the module are inert while public access is off, so "allow my laptop's IP"
+is not an available shortcut — the import has to run from a machine in the
+VNet. The mgmt VM is that machine.
+
+Copy the PFX up, then import from there:
 
 ```bash
+scp app.pfx azureadmin@<mgmt_vm_public_ip>:~
+ssh azureadmin@<mgmt_vm_public_ip>
+```
+
+The vault uses RBAC (`enable_rbac_authorization = true`), so subscription Owner
+alone does **not** grant data-plane rights — importing a certificate needs an
+explicit role. Grant it to yourself once:
+
+```bash
+az login --identity          # or your own account
+VAULT_ID=$(az keyvault show -n kv-dev-lab-<suffix> --query id -o tsv)
+az role assignment create --assignee <your-object-id> \
+  --role "Key Vault Certificates Officer" --scope "$VAULT_ID"
+
 az keyvault certificate import \
   --vault-name kv-dev-lab-<suffix> \
   --name app-tls \
   --file app.pfx
 ```
 
-### 6c. Give the gateway an identity that can read it
+Do not create the gateway's own role assignment this way — Terraform creates
+that one (6c), and a manual duplicate makes the next apply fail with
+`RoleAssignmentExists`.
 
-App Gateway reads the certificate from Key Vault at runtime, so the PFX never
-enters Terraform state:
+### 6c. Turn TLS on — Terraform does the rest
+
+No `az identity create`, no `az role assignment`. The module creates its own
+user-assigned identity and grants it `Key Vault Secrets User` on the vault.
+Creating those by hand as well is what produces `RoleAssignmentExists` on the
+next apply.
+
+Collect the two IDs:
 
 ```bash
-az identity create -g rg-hub-connectivity-lab -n id-appgw-dev
-
-PRINCIPAL=$(az identity show -g rg-hub-connectivity-lab -n id-appgw-dev --query principalId -o tsv)
-IDENTITY_ID=$(az identity show -g rg-hub-connectivity-lab -n id-appgw-dev --query id -o tsv)
-
-az role assignment create --assignee "$PRINCIPAL" \
-  --role "Key Vault Secrets User" \
-  --scope $(az keyvault show -n kv-dev-lab-<suffix> --query id -o tsv)
-
-az keyvault secret show --vault-name kv-dev-lab-<suffix> --name app-tls \
-  --query id -o tsv        # -> the secret ID for the next step
+az keyvault secret show --vault-name kv-dev-lab-<suffix> --name app-tls --query id -o tsv
+az keyvault show -n kv-dev-lab-<suffix> --query id -o tsv
 ```
 
-### 6d. Turn TLS on
-
-Add to `appgw.auto.tfvars` (strip the version suffix from the secret ID so the
-gateway follows rotations automatically):
+Then in `appgw.auto.tfvars` — **strip the trailing version GUID** from the
+secret ID so the gateway follows rotations automatically:
 
 ```hcl
+enable_https                        = true
 ssl_certificate_key_vault_secret_id = "https://kv-dev-lab-xxxx.vault.azure.net/secrets/app-tls"
-appgw_identity_id                   = "/subscriptions/.../userAssignedIdentities/id-appgw-dev"
+key_vault_id                        = "/subscriptions/<sub>/resourceGroups/rg-spoke-dev-vinorg-001/providers/Microsoft.KeyVault/vaults/kv-dev-lab-xxxx"
 ```
 
-Re-apply. The module then adds an HTTPS listener on 443 and turns the HTTP
-listener into a permanent redirect to it, so `http://` traffic upgrades itself.
+`terraform apply`. The module adds the `:443` listener and converts `:80` into
+a permanent redirect.
 
 ```bash
 curl -I http://app.yourdomain.com/    # expect 301 -> https://
 curl -I https://app.yourdomain.com/   # expect 200
 ```
+
+### The HTTP/HTTPS switch
+
+`enable_https` is a genuine toggle, not a one-way door:
+
+| `enable_https` | `http_redirect_to_https` | Result |
+| --- | --- | --- |
+| `false` (default) | — | `:80` serves the app. No certificate needed |
+| `true` | `true` (default) | `:80` → 301 → `:443` → app |
+| `true` | `false` | **both** `http://` and `https://` serve the app |
+
+Flipping it only adds or removes listeners and routing rules on the existing
+gateway — **the public IP never changes**, so the GoDaddy A record stays valid
+whichever way it is set. Set `http_redirect_to_https = false` while validating
+a new certificate, so a bad cert cannot take the site down.
+
+Misconfiguration is caught at **plan** time by preconditions, not 20 minutes
+into an apply: `enable_https = true` with no certificate source, with both
+sources, or with a Key Vault secret but no `key_vault_id`, each fail
+immediately with a specific message.
+
+### Alternative: skip Key Vault entirely
+
+If the vault's private endpoint makes the import awkward, Terraform can upload
+the PFX straight to the gateway instead — no vault, no identity, works from a
+CI runner with no route into the VNet:
+
+```hcl
+enable_https             = true
+ssl_certificate_pfx_path = "app.pfx"
+# TF_VAR_ssl_certificate_pfx_password=... (never commit this)
+```
+
+The trade-off is real: the PFX, private key included, is then stored in
+Terraform state. State sits in the backend storage account, encrypted at rest
+and access-controlled, but anyone who can read state can read the key. Prefer
+the Key Vault source when that matters.
 
 ## Troubleshooting
 

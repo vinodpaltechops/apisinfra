@@ -107,30 +107,94 @@ variable "ssl_policy_name" {
   }
 }
 
-variable "ssl_certificate_key_vault_secret_id" {
+variable "enable_https" {
   description = <<-EOT
-    Key Vault SECRET id of the certificate (not the certificate id) — the
-    unversioned form, e.g.
-    https://<vault>.vault.azure.net/secrets/<cert-name>
+    Master switch for TLS.
 
-    null (default) = HTTP only, so the gateway can be stood up and proven
-    before a certificate exists. Setting it adds an HTTPS listener and makes
-    HTTP permanently redirect to it.
+    false (default) — one listener on :80 serving the app. A complete, working
+                      configuration; the gateway does not need a certificate to
+                      be useful.
+    true            — adds a :443 listener. Requires exactly one certificate
+                      source below.
 
-    Requires identity_id, and that identity needs Key Vault "Get" on both
-    secrets and certificates.
+    Toggling this is non-destructive: it only adds or removes listeners and
+    routing rules on the existing gateway. The public IP is untouched, so the
+    DNS record never has to change.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "http_redirect_to_https" {
+  description = <<-EOT
+    Only meaningful when enable_https = true.
+
+    true (default) — :80 returns a permanent redirect to :443. The right answer
+                     for a public site: nothing is served in clear text.
+    false          — :80 keeps serving the app directly, alongside :443, so
+                     both http:// and https:// work. Useful while testing a
+                     certificate, but it does mean the app remains reachable
+                     unencrypted.
+  EOT
+  type        = bool
+  default     = true
+}
+
+# ── Certificate source: supply exactly ONE when enable_https = true ───────────
+
+variable "ssl_certificate_pfx_path" {
+  description = <<-EOT
+    Path to a PFX/PKCS12 file, uploaded to the gateway by Terraform. Needs no
+    Key Vault and no managed identity, so it works from a CI runner that has no
+    network path to a private vault — the simplest way to get HTTPS.
+
+    TRADE-OFF: the PFX (private key included) is stored in Terraform state.
+    State lives in the backend storage account, encrypted at rest and
+    access-controlled, but anyone who can read state can read the key. Use the
+    Key Vault source instead if that matters.
   EOT
   type        = string
   default     = null
 }
 
-variable "identity_id" {
-  description = "User-assigned managed identity resource ID used to read the TLS certificate from Key Vault. Required when ssl_certificate_key_vault_secret_id is set."
+variable "ssl_certificate_pfx_password" {
+  description = "Password for ssl_certificate_pfx_path. Pass \"\" for a PFX exported without one. Supply via TF_VAR_ssl_certificate_pfx_password, never in a committed tfvars file."
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
+variable "ssl_certificate_key_vault_secret_id" {
+  description = <<-EOT
+    Key Vault SECRET id of the certificate (not the certificate id), in the
+    UNVERSIONED form so the gateway picks up rotations automatically:
+      https://<vault>.vault.azure.net/secrets/<cert-name>
+
+    The private key never enters Terraform state — the gateway fetches it at
+    runtime using a managed identity this module creates and grants access for
+    (see key_vault_id). Requires key_vault_id.
+
+    The certificate itself must already exist in the vault. That import is a
+    data-plane operation, so against a private-endpoint-only vault it has to be
+    run from inside the VNet — see docs/public-endpoint.md.
+  EOT
   type        = string
   default     = null
 }
 
+variable "key_vault_id" {
+  description = "Resource ID of the vault holding the certificate. Required with ssl_certificate_key_vault_secret_id: the module creates a user-assigned identity and grants it Key Vault Secrets User here, so no manual az role assignment is needed."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.key_vault_id == null || can(regex("/providers/Microsoft.KeyVault/vaults/", var.key_vault_id))
+    error_message = "key_vault_id must be a full Key Vault resource ID (/subscriptions/.../providers/Microsoft.KeyVault/vaults/<name>)."
+  }
+}
+
 variable "tags" {
+
   type    = map(string)
   default = {}
 }
