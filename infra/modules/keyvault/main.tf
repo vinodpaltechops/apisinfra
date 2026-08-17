@@ -73,6 +73,25 @@ resource "azurerm_role_assignment" "vm_identity_kv_secrets_user" {
   principal_id         = var.vm_identity_principal_id
 }
 
+# WRITE access to certificates for the same identity — needed to run
+# `az keyvault certificate import` from the mgmt VM.
+#
+# That import has to happen on a VM: the vault has no public endpoint, so its
+# data plane is only reachable through the private endpoint. And it has to use
+# the VM's identity, because Entra security defaults block the device-code flow
+# and the VM has no browser for the interactive one — so `az login --identity`
+# is the only way to authenticate there.
+#
+# Secrets User (above) is read-only and returns 403 on an import, hence a
+# separate role. Off by default: this is write access to private keys, so only
+# enable it while a certificate genuinely needs installing.
+resource "azurerm_role_assignment" "vm_identity_kv_certificates_officer" {
+  count                = var.grant_vm_certificate_officer ? 1 : 0
+  scope                = azurerm_key_vault.this.id
+  role_definition_name = "Key Vault Certificates Officer"
+  principal_id         = var.vm_identity_principal_id
+}
+
 # ── Secrets — NOT managed by Terraform (hardened: public access OFF) ───────────
 # With public_network_access_enabled = false, secret writes are a DATA-plane op
 # that only works from INSIDE the network (via the private endpoint). Terraform
