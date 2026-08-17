@@ -42,6 +42,24 @@ variable "app_config_value" {
   default = "my-application-configuration-string"
 }
 
+variable "grant_vm_certificate_officer" {
+  description = <<-EOT
+    Grant the VM's managed identity "Key Vault Certificates Officer" so it can
+    run `az keyvault certificate import` from the mgmt VM.
+
+    Needed for the App Gateway TLS workflow (docs/public-endpoint.md): the vault
+    has no public endpoint, so the import must run inside the VNet, and on a
+    headless VM `az login --identity` is the only usable sign-in — which means
+    the identity itself needs write access. Secrets User alone returns 403.
+
+    Default false because this is write access to private keys. Turn it on to
+    install or renew a certificate; turning it back off afterwards does not
+    affect the gateway, which only ever reads the cert via its own identity.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

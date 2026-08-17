@@ -31,6 +31,12 @@ variable "mgmt_ssh_source_prefix" {
   default     = "163.223.165.0/24"
 }
 
+variable "grant_vm_certificate_officer" {
+  description = "Grant the mgmt VM's identity Key Vault Certificates Officer so it can import the App Gateway TLS certificate. Set true while installing or renewing a cert; see docs/public-endpoint.md."
+  type        = bool
+  default     = false
+}
+
 variable "acr_name" {
   description = "Globally unique ACR name (alphanumeric only). Change it if `az acr check-name -n <name>` says it is taken."
   type        = string

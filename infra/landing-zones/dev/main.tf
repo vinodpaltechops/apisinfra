@@ -223,7 +223,11 @@ module "keyvault" {
   # VM left and is the one that needs to read secrets.
   vm_identity_principal_id = module.linux_vm_mgmt.vm_principal_id
   allowed_ip_rules         = var.allowed_ip_rules
-  tags                     = local.tags
+  # Lets the mgmt VM run `az keyvault certificate import` for the App Gateway
+  # TLS certificate — the vault is private, so that import can only happen from
+  # inside the VNet. See docs/public-endpoint.md.
+  grant_vm_certificate_officer = var.grant_vm_certificate_officer
+  tags                         = local.tags
 }
 
 # ── AKS cluster (private, into the reserved snet-aks-* subnets) ────────────────
