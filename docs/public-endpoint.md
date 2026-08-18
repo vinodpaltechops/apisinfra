@@ -282,6 +282,29 @@ The NSG's `allow-gateway-manager` rule (inbound 65200-65535 from the
 `GatewayManager` service tag) is mandatory. It is in the module — but if you
 edit that NSG, do not remove it.
 
+**`ApplicationGatewayKeyVaultSecretAccessDenied` when enabling TLS**
+The vault needs `public_network_access_enabled = true` (with
+`default_action = "Deny"` kept), which is why
+`keyvault_public_network_access_enabled` defaults to true in the dev layer.
+
+The error text blames the identity, but that is usually a red herring — check
+the role assignment first and you will normally find it correct. The real cause
+is that App Gateway reads the certificate from its **control plane**, which is
+Microsoft-operated and not in your VNet, so it cannot use the vault's private
+endpoint. It resolves the vault's public FQDN via public DNS, and with the
+public endpoint removed there is nothing to connect to. Authorization is never
+reached, because the connection never succeeds.
+
+A private endpoint serves *your* network. It does not make Azure's own control
+plane able to reach the vault — the same reason `terraform apply` from a laptop
+cannot write secrets to this vault, and why the certificate import has to run on
+the mgmt VM.
+
+Turning public access on does not expose the vault: `default_action` stays
+`Deny`, so the internet still gets nothing. It re-activates the firewall so
+`bypass = "AzureServices"` (which covers App Gateway) and `ip_rules` apply at
+all. While public access is off, every one of those rules is inert.
+
 **A legitimate request gets 403**
 WAF false positive. Switch `waf_mode = "Detection"`, reproduce, find the rule
 ID in the firewall log, then add a targeted exclusion — rather than leaving WAF

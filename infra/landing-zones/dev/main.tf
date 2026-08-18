@@ -227,7 +227,20 @@ module "keyvault" {
   # TLS certificate — the vault is private, so that import can only happen from
   # inside the VNet. See docs/public-endpoint.md.
   grant_vm_certificate_officer = var.grant_vm_certificate_officer
-  tags                         = local.tags
+
+  # REQUIRED for App Gateway TLS. The gateway reads the certificate from its
+  # control plane, which is outside this VNet and so cannot use the private
+  # endpoint; with the public endpoint removed it fails with
+  # ApplicationGatewayKeyVaultSecretAccessDenied even though its RBAC is correct.
+  #
+  # This does not open the vault: network_acls keeps default_action = "Deny", so
+  # only the AzureServices bypass (which covers App Gateway) and allowed_ip_rules
+  # get through, and the private endpoint keeps working unchanged.
+  #
+  # Set back to false if you drop the App Gateway — but note that also silently
+  # disables allowed_ip_rules, since the firewall stops applying.
+  public_network_access_enabled = var.keyvault_public_network_access_enabled
+  tags                          = local.tags
 }
 
 # ── AKS cluster (private, into the reserved snet-aks-* subnets) ────────────────
