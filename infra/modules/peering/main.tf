@@ -31,4 +31,23 @@ resource "azurerm_virtual_network_peering" "hub_to_spoke" {
   allow_gateway_transit        = var.hub_has_gateway # share Hub gateway to spokes
 
   provider = azurerm.hub
+
+  # MUST be sequential, not parallel. Nothing in the configuration links these
+  # two resources, so Terraform would otherwise create both at once — and Azure
+  # cannot process concurrent peering writes across the same VNet pair. One
+  # side then fails with:
+  #
+  #   ReferencedResourceNotProvisioned: Cannot proceed with operation because
+  #   resource .../virtualNetworks/vnet-spoke-dev-001 is not in Succeeded state
+  #
+  # It is a race, so it only fails sometimes — which is worse than always
+  # failing, because a half-built peering looks fine until something needs it.
+  #
+  # The consequence is not subtle: the surviving side sits in "Initiated"
+  # instead of "Connected" and carries NO traffic. Spoke workloads then cannot
+  # reach the hub DNS resolver, so a private AKS node cannot resolve anything
+  # during bootstrap and its vmssCSE extension dies with ExitCode 50
+  # (ERR_OUTBOUND_CONN_FAIL) — after the cluster has spent ~45 minutes in
+  # "Creating". The symptom is nowhere near the cause.
+  depends_on = [azurerm_virtual_network_peering.spoke_to_hub]
 }
