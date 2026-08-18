@@ -31,6 +31,12 @@ variable "mgmt_ssh_source_prefix" {
   default     = "163.223.165.0/24"
 }
 
+variable "keyvault_public_network_access_enabled" {
+  description = "true re-activates the Key Vault firewall so App Gateway (a trusted Azure service) can fetch the TLS certificate. default_action stays Deny, so the vault is still not internet-reachable. Required whenever the appgw layer uses the Key Vault certificate source."
+  type        = bool
+  default     = true
+}
+
 variable "grant_vm_certificate_officer" {
   description = "Grant the mgmt VM's identity Key Vault Certificates Officer so it can import the App Gateway TLS certificate. Set true while installing or renewing a cert; see docs/public-endpoint.md."
   type        = bool

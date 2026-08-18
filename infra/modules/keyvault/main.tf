@@ -44,16 +44,34 @@ resource "azurerm_key_vault" "this" {
   enable_rbac_authorization     = true
   soft_delete_retention_days    = 7
   purge_protection_enabled      = false # false for lab — easier cleanup
-  public_network_access_enabled = false
+  public_network_access_enabled = var.public_network_access_enabled
 
-  # NOTE: while public_network_access_enabled = false, these ip_rules are INERT
-  # (the public endpoint is fully off — only the private endpoint + trusted
-  # AzureServices reach the data plane). They take effect only if you flip public
-  # access back on. bypass = AzureServices lets the AKS CSI provider etc. through.
+  # This block IS the firewall — and a firewall only applies to an endpoint that
+  # exists. With public_network_access_enabled = false the public endpoint is
+  # removed entirely, so every rule below (ip_rules, bypass, VNet rules) is
+  # INERT and the private endpoint is the only way in.
+  #
+  # That is why an Azure service which fetches from this vault out-of-band fails
+  # with public access off, no matter how correct its RBAC is: Application
+  # Gateway reads the TLS certificate from its CONTROL plane, which is not in
+  # your VNet and therefore cannot use the private endpoint. It resolves the
+  # vault's public FQDN and finds nothing to connect to:
+  #
+  #   ApplicationGatewayKeyVaultSecretAccessDenied ... Make sure ... KeyVault has
+  #   'Allow trusted Microsoft services to bypass this firewall' set to 'yes'
+  #
+  # Setting public_network_access_enabled = true does NOT open the vault: with
+  # default_action = "Deny" the internet still gets nothing. It re-activates the
+  # firewall so that bypass = "AzureServices" (which covers App Gateway) and the
+  # ip_rules can actually take effect.
   network_acls {
     default_action = "Deny"
     bypass         = "AzureServices"
     ip_rules       = var.allowed_ip_rules
+    # Optional extra narrowing: allow specific subnets. Each listed subnet must
+    # already exist AND have the Microsoft.KeyVault service endpoint enabled, so
+    # only pass subnets created in an earlier layer than this one.
+    virtual_network_subnet_ids = var.allowed_subnet_ids
   }
 
   tags = var.tags

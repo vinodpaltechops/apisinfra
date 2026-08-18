@@ -42,6 +42,44 @@ variable "app_config_value" {
   default = "my-application-configuration-string"
 }
 
+variable "public_network_access_enabled" {
+  description = <<-EOT
+    false (default) removes the vault's public endpoint entirely. Most private,
+    but it also makes the whole network_acls block inert — ip_rules, the
+    AzureServices bypass and any VNet rules stop applying, because there is no
+    endpoint left for a firewall to guard.
+
+    Set true when an Azure service must read from this vault from OUTSIDE your
+    VNet. Application Gateway is the case here: it fetches its TLS certificate
+    from its control plane, which is not in your VNet and so cannot use the
+    private endpoint, and fails with
+    ApplicationGatewayKeyVaultSecretAccessDenied.
+
+    true does NOT expose the vault — default_action stays "Deny", so the
+    internet still gets nothing. It just re-activates the firewall so the
+    AzureServices bypass and ip_rules take effect. The private endpoint
+    continues to work exactly as before.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "allowed_subnet_ids" {
+  description = <<-EOT
+    Subnets allowed through the vault firewall (a VNet rule). Only meaningful
+    when public_network_access_enabled = true.
+
+    Each subnet must ALREADY EXIST and have the Microsoft.KeyVault service
+    endpoint enabled when this module applies — so it can only reference
+    subnets built in an earlier layer. The App Gateway subnet does not qualify:
+    it is created by the appgw layer, which deploys AFTER this one. The
+    AzureServices bypass already covers App Gateway, so no VNet rule is needed
+    for it.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
 variable "grant_vm_certificate_officer" {
   description = <<-EOT
     Grant the VM's managed identity "Key Vault Certificates Officer" so it can
