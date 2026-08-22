@@ -1,5 +1,14 @@
 # Deploying Content Hub to the private AKS cluster
 
+> **Argo CD now owns the rollout.** `app-deploy` builds and pushes images, then
+> commits the new tag into `k8s/overlays/{dev,dr}` — Argo CD applies it. The
+> `kubectl apply` path described below is preserved (commented out in
+> `app-deploy.yml`) but is no longer what runs. See
+> [k8s/gitops/README.md](gitops/README.md) for the current flow, and
+> [docs/disaster-recovery.md](../docs/disaster-recovery.md) for the two-region
+> picture. Everything below about the private-cluster access path,
+> `az aks command invoke`, resource budget and troubleshooting still applies.
+
 ```
 k8s/
   base/                    namespace, 3 deployments+services, ingress, HPAs, network policies

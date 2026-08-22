@@ -1,23 +1,32 @@
 # APP DEPLOY — builds the three microservice images, pushes them to ACR, and
-# rolls them out to the PRIVATE AKS cluster.
+# hands the rollout to Argo CD by committing the new tag back to this repo.
 #
-# The interesting constraint: the AKS API server has no public endpoint, so a
-# GitHub-hosted runner cannot run `kubectl` against it. Instead the deploy step
-# uses `az aks command invoke`, which asks the AKS resource provider to run the
-# command from a pod INSIDE the cluster and streams the output back. That is a
-# control-plane (ARM) call, so it needs no network route into the spoke.
+# ── What changed, and why ─────────────────────────────────────────────────────
+# This pipeline used to run `az aks command invoke -- kubectl apply` against the
+# private cluster. Argo CD now owns the cluster, so the pipeline's last step is
+# a git commit instead:
 #
-# The alternative — a self-hosted runner on the jump VM — is the right answer
-# once you also want a private-endpoint ACR. See infra/modules/acr/main.tf.
+#   build → push to ACR → `kustomize edit set image` in BOTH overlays
+#         → commit to main → Argo CD notices → rolls out in BOTH regions
 #
-# Authorisation the deploy SP needs, both already in place:
-#   • ARM: Microsoft.ContainerService/managedClusters/runcommand/action
-#     (covered by its Owner assignment at the root management group)
-#   • Kubernetes: "Azure Kubernetes Service RBAC Cluster Admin" on the cluster
-#     (granted by infra/modules/aks — grant_operator_cluster_admin = true)
+# Three things this buys:
+#   • The DR cluster gets the same image automatically. Under the old model it
+#     would have needed a second deploy job and would drift the moment one of
+#     them failed.
+#   • The pipeline no longer needs cluster access at all — no run-command
+#     permission, no Kubernetes RBAC. Its blast radius is a git commit.
+#   • The repo describes what is running. Under `kubectl apply` from CI, the
+#     cluster could run an image no commit mentioned.
 #
-# Prerequisite, once per cluster: the internal ingress controller.
-#   Run the aks-platform-bootstrap workflow before the first deploy.
+# The cost is that a rollout is no longer synchronous — this workflow goes green
+# when the tag is committed, not when the pods are Ready. Watch the rollout in
+# Argo CD, or use the `Report sync status` step at the end.
+#
+# ── Reverting to the push model ───────────────────────────────────────────────
+# The original deploy job is preserved, commented out, at the bottom of this
+# file. Re-enable it and delete the `promote` job to go back. You would also
+# want to disable the content-hub Application's auto-sync first, or Argo CD and
+# the pipeline will fight over the same Deployments.
 name: app-deploy
 
 on:
@@ -31,20 +40,24 @@ on:
 
 permissions:
   id-token: write # mint the GitHub OIDC token for federated Azure login
-  contents: read
+  contents: write # REQUIRED: the promote job commits the image tag back to main
+
+# A second run overtaking the first would commit an older SHA on top of a newer
+# one, leaving Argo CD to deploy the older image. Serialise, and do NOT cancel
+# in-progress runs — a cancelled run can leave the images pushed but the tag
+# un-committed, which is a silent no-op rather than a visible failure.
+concurrency:
+  group: app-deploy
+  cancel-in-progress: false
 
 env:
-  # Defaults match the Terraform defaults (infra/landing-zones/dev). Override
-  # with repository variables if you renamed anything.
   ACR_NAME: ${{ vars.ACR_NAME || 'acrdevvinorg001' }}
-  AKS_RESOURCE_GROUP: ${{ vars.AKS_RESOURCE_GROUP || 'rg-spoke-dev-vinorg-001' }}
-  AKS_CLUSTER_NAME: ${{ vars.AKS_CLUSTER_NAME || 'aks-dev-lab-001' }}
-  K8S_NAMESPACE: content-hub
   IMAGE_REPO_PREFIX: content-hub
+  K8S_NAMESPACE: content-hub
 
 jobs:
   # ── 1) Tests — gate the build. Cheap, and a broken BFF contract should never
-  #        reach a registry, let alone the cluster.
+  #        reach a registry, let alone a cluster.
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -111,7 +124,8 @@ jobs:
           context: apps/${{ matrix.service }}
           push: true
           # Immutable tag only. A moving `latest` makes a rollout
-          # unreproducible and breaks `kubectl rollout undo`.
+          # unreproducible — and under GitOps it is worse than before, because
+          # Argo CD would see no diff to sync at all.
           tags: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_REPO_PREFIX }}/${{ matrix.service }}:${{ github.sha }}
           build-args: |
             APP_VERSION=${{ github.sha }}
@@ -120,20 +134,22 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
-  # ── 3) Roll out to the private cluster ──────────────────────────────────────
-  deploy:
-    name: Deploy to AKS
+  # ── 3) Promote: pin the new tag in Git; Argo CD does the rest ───────────────
+  promote:
+    name: Promote to GitOps
     needs: build
     runs-on: ubuntu-latest
-    environment: production # attach required reviewers here to gate rollouts
+    environment: production # attach required reviewers here to gate releases
     steps:
       - uses: actions/checkout@v4
-
-      - uses: azure/login@v2
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          # The default checkout is a detached HEAD at the triggering SHA, which
+          # cannot be pushed from. Check out the branch itself.
+          ref: main
+          # Use the default GITHUB_TOKEN. Note the deliberate consequence: a
+          # push made with it does NOT trigger other workflows, which is a
+          # second layer of loop protection behind the [skip ci] below.
+          persist-credentials: true
 
       # `kubectl kustomize` can build an overlay but not edit one, so the
       # standalone binary is needed for `kustomize edit set image`.
@@ -146,57 +162,151 @@ jobs:
         env:
           KUSTOMIZE_VERSION: 5.5.0
 
-      # Pin every image to this commit, then flatten the overlay to one file so
-      # the whole desired state travels as a single upload.
-      - name: Render manifests
-        working-directory: k8s/overlays/dev
+      # BOTH overlays, in ONE commit. Bumping them separately is how the two
+      # regions end up on different builds — and you would only find out during
+      # a failover, which is the worst possible moment to discover it.
+      - name: Pin image tags in both overlays
         run: |
+          set -euo pipefail
           registry="${ACR_NAME}.azurecr.io/${IMAGE_REPO_PREFIX}"
-          for svc in content-api backend frontend; do
-            kustomize edit set image "${svc}=${registry}/${svc}:${GITHUB_SHA}"
+
+          for overlay in dev dr; do
+            # The DR overlay may legitimately not exist yet (DR not stood up).
+            [ -d "k8s/overlays/${overlay}" ] || { echo "skip: k8s/overlays/${overlay} absent"; continue; }
+
+            ( cd "k8s/overlays/${overlay}"
+              for svc in content-api backend frontend; do
+                kustomize edit set image "${svc}=${registry}/${svc}:${GITHUB_SHA}"
+              done
+            )
+            echo "--- ${overlay} renders as ---"
+            kustomize build "k8s/overlays/${overlay}" | grep 'image:'
           done
-          kustomize build . > "${GITHUB_WORKSPACE}/rendered.yaml"
-          echo "--- images in this rollout ---"
-          grep 'image:' "${GITHUB_WORKSPACE}/rendered.yaml"
 
-      # `command invoke` runs kubectl from inside the cluster. -f uploads the
-      # file into that pod's working directory.
-      - name: Apply
+      - name: Commit and push
         run: |
-          az aks command invoke \
-            --resource-group "$AKS_RESOURCE_GROUP" \
-            --name "$AKS_CLUSTER_NAME" \
-            --command "kubectl apply -f rendered.yaml" \
-            --file rendered.yaml
+          set -euo pipefail
 
-      # Separate step so a failed rollout is distinguishable from a failed
-      # apply. --timeout exceeds the AcrPull RBAC propagation window, which can
-      # hold the very first pull in ImagePullBackOff for a minute or two.
-      - name: Wait for rollout
-        run: |
-          az aks command invoke \
-            --resource-group "$AKS_RESOURCE_GROUP" \
-            --name "$AKS_CLUSTER_NAME" \
-            --command "kubectl -n $K8S_NAMESPACE rollout status deploy/content-api --timeout=300s &&
-                       kubectl -n $K8S_NAMESPACE rollout status deploy/backend     --timeout=300s &&
-                       kubectl -n $K8S_NAMESPACE rollout status deploy/frontend    --timeout=300s"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Report endpoint
-        run: |
-          az aks command invoke \
-            --resource-group "$AKS_RESOURCE_GROUP" \
-            --name "$AKS_CLUSTER_NAME" \
-            --command "kubectl -n $K8S_NAMESPACE get pods,ing -o wide &&
-                       kubectl -n ingress-nginx get svc ingress-nginx-controller"
+          # No changes is a normal outcome — a re-run of the same SHA, or a push
+          # that touched only apps/ test files. Exit clean rather than failing.
+          if git diff --quiet -- k8s/overlays; then
+            echo "Image tags already at ${GITHUB_SHA}; nothing to promote."
+            exit 0
+          fi
 
-      # Rollback on failure. Kubernetes keeps the previous ReplicaSet
-      # (revisionHistoryLimit: 3), so this restores the last good images.
-      - name: Roll back on failure
-        if: failure()
+          git add k8s/overlays
+
+          # [skip ci] is the primary loop guard: this commit touches k8s/**,
+          # which is one of this workflow's own trigger paths. GITHUB_TOKEN
+          # pushes not triggering workflows is the backstop, not the plan —
+          # relying on it alone breaks the moment someone swaps in a PAT.
+          git commit -m "chore(deploy): content-hub images -> ${GITHUB_SHA} [skip ci]"
+
+          # Rebase rather than merge: another commit may have landed on main
+          # during the build, and a merge commit from a bot in the deployment
+          # history is noise.
+          git pull --rebase --autostash origin main
+          git push origin main
+
+      - name: Report sync status
         run: |
-          az aks command invoke \
-            --resource-group "$AKS_RESOURCE_GROUP" \
-            --name "$AKS_CLUSTER_NAME" \
-            --command "kubectl -n $K8S_NAMESPACE rollout undo deploy/content-api || true;
-                       kubectl -n $K8S_NAMESPACE rollout undo deploy/backend     || true;
-                       kubectl -n $K8S_NAMESPACE rollout undo deploy/frontend    || true"
+          cat <<EOF
+          Images pushed and pinned at ${GITHUB_SHA}.
+
+          Argo CD rolls this out on its next reconcile (<= 3 min in each
+          cluster, or immediately if you have configured a GitHub webhook).
+          This workflow does NOT wait for pods to become Ready.
+
+          Watch it from the mgmt VM:
+            kubectl -n argocd get application content-hub -w
+            kubectl -n ${K8S_NAMESPACE} rollout status deploy/frontend
+
+          Roll back by reverting this commit — Argo CD converges on whatever
+          main says, so \`git revert\` IS the rollback. There is no
+          \`kubectl rollout undo\` step any more; selfHeal would simply put the
+          committed image back.
+          EOF
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PRESERVED: the pre-GitOps deploy job.
+#
+# Restore this (and delete the `promote` job above) to go back to CI applying
+# manifests directly. Before doing so, set syncPolicy.automated to null on the
+# content-hub Application in k8s/gitops/apps/*/content-hub.yaml — otherwise
+# Argo CD's selfHeal reverts whatever this job applies, within seconds, and the
+# resulting fight is genuinely confusing to debug.
+#
+#   deploy:
+#     name: Deploy to AKS
+#     needs: build
+#     runs-on: ubuntu-latest
+#     environment: production
+#     env:
+#       AKS_RESOURCE_GROUP: ${{ vars.AKS_RESOURCE_GROUP || 'rg-spoke-dev-vinorg-001' }}
+#       AKS_CLUSTER_NAME: ${{ vars.AKS_CLUSTER_NAME || 'aks-dev-lab-001' }}
+#     steps:
+#       - uses: actions/checkout@v4
+#
+#       - uses: azure/login@v2
+#         with:
+#           client-id: ${{ vars.AZURE_CLIENT_ID }}
+#           tenant-id: ${{ vars.AZURE_TENANT_ID }}
+#           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+#
+#       - name: Install kustomize
+#         run: |
+#           curl -sSfL -o /tmp/kustomize.tar.gz \
+#             "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
+#           tar -xzf /tmp/kustomize.tar.gz -C /usr/local/bin kustomize
+#           kustomize version
+#         env:
+#           KUSTOMIZE_VERSION: 5.5.0
+#
+#       - name: Render manifests
+#         working-directory: k8s/overlays/dev
+#         run: |
+#           registry="${ACR_NAME}.azurecr.io/${IMAGE_REPO_PREFIX}"
+#           for svc in content-api backend frontend; do
+#             kustomize edit set image "${svc}=${registry}/${svc}:${GITHUB_SHA}"
+#           done
+#           kustomize build . > "${GITHUB_WORKSPACE}/rendered.yaml"
+#           echo "--- images in this rollout ---"
+#           grep 'image:' "${GITHUB_WORKSPACE}/rendered.yaml"
+#
+#       - name: Apply
+#         run: |
+#           az aks command invoke \
+#             --resource-group "$AKS_RESOURCE_GROUP" \
+#             --name "$AKS_CLUSTER_NAME" \
+#             --command "kubectl apply -f rendered.yaml" \
+#             --file rendered.yaml
+#
+#       - name: Wait for rollout
+#         run: |
+#           az aks command invoke \
+#             --resource-group "$AKS_RESOURCE_GROUP" \
+#             --name "$AKS_CLUSTER_NAME" \
+#             --command "kubectl -n $K8S_NAMESPACE rollout status deploy/content-api --timeout=300s &&
+#                        kubectl -n $K8S_NAMESPACE rollout status deploy/backend     --timeout=300s &&
+#                        kubectl -n $K8S_NAMESPACE rollout status deploy/frontend    --timeout=300s"
+#
+#       - name: Report endpoint
+#         run: |
+#           az aks command invoke \
+#             --resource-group "$AKS_RESOURCE_GROUP" \
+#             --name "$AKS_CLUSTER_NAME" \
+#             --command "kubectl -n $K8S_NAMESPACE get pods,ing -o wide &&
+#                        kubectl -n ingress-nginx get svc ingress-nginx-controller"
+#
+#       - name: Roll back on failure
+#         if: failure()
+#         run: |
+#           az aks command invoke \
+#             --resource-group "$AKS_RESOURCE_GROUP" \
+#             --name "$AKS_CLUSTER_NAME" \
+#             --command "kubectl -n $K8S_NAMESPACE rollout undo deploy/content-api || true;
+#                        kubectl -n $K8S_NAMESPACE rollout undo deploy/backend     || true;
+#                        kubectl -n $K8S_NAMESPACE rollout undo deploy/frontend    || true"

@@ -40,18 +40,64 @@ jobs:
           fi
           echo "Confirmed — destroying layers one by one, in reverse order."
 
-  # 1) Application Gateway — destroyed FIRST: it is the outermost layer and
-  #    holds a subnet inside the hub VNet, which connectivity cannot delete
-  #    while that subnet is still in use.
+  # ─────────────────────────────────────────────────────────────────────────────
+  # DR LAYERS — destroyed FIRST, in reverse of the deploy order.
+  #
+  # TO REMOVE DR: comment out this block AND change the `dev` job below from
+  #   needs: [appgw, dr]   back to   needs: appgw
+  # That is the only other reference to these jobs. Leaving it pointing at a
+  # commented-out job makes the whole workflow fail to parse.
+  #
+  # infra/platform/velero is DELIBERATELY ABSENT from this pipeline. It holds
+  # the backup storage account, and destroying it deletes every backup — the one
+  # thing a teardown must never take with it. Tear it down by hand, on purpose:
+  #   terraform -chdir=infra/platform/velero destroy
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  # 0a) Front Door — outermost. Before this runs, point app_fqdn back at the
+  #     primary gateway's A record: destroying Front Door while the CNAME still
+  #     targets its endpoint is a hard outage, not a graceful fallback.
+  frontdoor:
+    needs: guard
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/frontdoor, destroy: true }
+    secrets: inherit
+
+  # 0b) DR Application Gateway — holds a subnet in the DR spoke VNet, which the
+  #     DR landing zone cannot delete while it is in use.
+  appgw-dr:
+    needs: frontdoor
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/appgw-dr, destroy: true }
+    secrets: inherit
+
+  # 0c) DR landing zone — before dev, because it reads dev's state (mgmt VM
+  #     identity, shared ACR, jump VNet) and owns both halves of the
+  #     jump↔DR-spoke peering.
+  dr:
+    needs: appgw-dr
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/landing-zones/dr, destroy: true }
+    secrets: inherit
+
+  # 1) Application Gateway — the outermost of the original layers, and it holds
+  #    a subnet inside the hub VNet which connectivity cannot delete while that
+  #    subnet is still in use.
   appgw:
     needs: guard
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/platform/appgw, destroy: true }
     secrets: inherit
 
-  # 2) Dev landing zone
+  # 2) Dev landing zone — waits on BOTH the primary gateway and the entire DR
+  #    chain. The DR layer reads dev's state for the mgmt VM identity, the shared
+  #    ACR and the jump VNet, and owns both halves of the jump↔DR-spoke peering.
+  #    Destroying dev first would pull those out from under a DR layer that is
+  #    still being destroyed.
+  #
+  #    Without the DR block above, this reverts to `needs: appgw`.
   dev:
-    needs: appgw
+    needs: [appgw, dr]
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/landing-zones/dev, destroy: true }
     secrets: inherit

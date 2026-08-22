@@ -84,3 +84,56 @@ jobs:
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/platform/appgw, apply: true }
     secrets: inherit
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # DR LAYERS — comment out this whole block to return to the single-region
+  # stack. Nothing above depends on anything below, so removing them is safe at
+  # any time (destroy them first if they are already deployed).
+  #
+  # QUOTA: the `dr` job creates a 2-node AKS cluster (4 vCPU) in dr_location.
+  # centralindia currently has 0 spare vCPU — the jump and mgmt VMs use all 4 —
+  # so this job FAILS with a quota error until an increase is granted. Request
+  # it before enabling: az vm list-usage --location centralindia -o table
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  # 6) DR landing zone — spoke + private AKS in the second region.
+  #    Needs dev applied: it reads dev's state for the mgmt VM identity, the
+  #    shared ACR and the jump VNet.
+  dr:
+    needs: dev
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/landing-zones/dr, apply: true }
+    secrets: inherit
+
+  # 7) Velero backup store — federates BOTH clusters' OIDC issuers, so it needs
+  #    both landing zones applied. Creates no Kubernetes objects; the Velero
+  #    install itself is GitOps (k8s/gitops/platform/velero).
+  #
+  #    NOTE: this layer holds the backups. Adding it here is safe, but never add
+  #    it to terraform-destroy without meaning it.
+  velero:
+    needs: dr
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/velero, apply: true }
+    secrets: inherit
+
+  # 8) DR Application Gateway — the second region's origin.
+  appgw-dr:
+    needs: dr
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/appgw-dr, apply: true }
+    secrets: inherit
+
+  # 9) Front Door — LAST, because it consumes both gateways' public IPs as
+  #    origins.
+  #
+  #    Applying it does NOT change what users see: app_fqdn still resolves to
+  #    the primary gateway's A record until you cut DNS over by hand. Run
+  #    `terraform output dns_records` in this layer for the two records, and see
+  #    docs/disaster-recovery.md for the full cutover, which is deliberately
+  #    manual and reversible.
+  frontdoor:
+    needs: [appgw, appgw-dr]
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/frontdoor, apply: true }
+    secrets: inherit
