@@ -82,7 +82,24 @@ resource "azurerm_storage_container" "layers" {
     "keyvault",
     "firewall",
     "policies-dine",
-    "appgw"
+    "appgw",
+
+    # ── DR add-on ───────────────────────────────────────────────────────────
+    # The azurerm backend does NOT create its container — it expects one to
+    # exist and fails at `terraform init` with "container does not exist" if it
+    # does not. So every new layer must be listed HERE and bootstrap re-applied
+    # BEFORE that layer is ever planned.
+    #
+    # Bootstrap is not part of terraform-deploy (it creates the backend the
+    # pipeline uses), so this is a manual step:
+    #   terraform -chdir=infra/platform/bootstrap apply
+    #
+    # Adding names is safe and additive — prevent_destroy below protects the
+    # existing containers, and re-applying does not touch any state file.
+    "landing-zones-dr",
+    "velero",
+    "appgw-dr",
+    "frontdoor",
   ])
 
   name                  = each.key

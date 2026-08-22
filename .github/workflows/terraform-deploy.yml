@@ -104,6 +104,19 @@ jobs:
   # (infra/platform/policies) — that assignment is a DENY at the org root, so
   # every resource below is rejected without it. The pipeline already applies
   # policies (job 2) before this block.
+  #
+  # STATE CONTAINERS — do this FIRST, once, by hand. Each layer below uses a new
+  # backend container (landing-zones-dr, velero, appgw-dr, frontdoor). The
+  # azurerm backend does not create its container; it fails at `terraform init`
+  # with "container does not exist". They are declared in
+  # infra/platform/bootstrap, which is deliberately NOT part of this pipeline
+  # because it owns the backend the pipeline itself uses:
+  #
+  #   terraform -chdir=infra/platform/bootstrap init
+  #   terraform -chdir=infra/platform/bootstrap apply
+  #
+  # Additive and safe to re-run — prevent_destroy guards the existing
+  # containers, and no state file is touched.
   # ─────────────────────────────────────────────────────────────────────────────
 
   # 6) DR landing zone — spoke + private AKS in the second region.

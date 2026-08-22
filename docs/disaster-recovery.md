@@ -92,7 +92,21 @@ Order matters. Layers 6–9 are the DR block in `terraform-deploy.yml`.
 9.   platform/frontdoor    global entry point
 ```
 
-**Before you start: policy, not quota.**
+**Step 0 — create the state containers.** Each DR layer uses a new backend
+container, and the azurerm backend does *not* create one: `terraform init`
+fails with "container does not exist". They are declared in
+`infra/platform/bootstrap`, which is deliberately outside `terraform-deploy`
+because it owns the backend the pipeline itself uses. So this is manual, once:
+
+```bash
+terraform -chdir=infra/platform/bootstrap init
+terraform -chdir=infra/platform/bootstrap apply   # adds landing-zones-dr, velero, appgw-dr, frontdoor
+```
+
+Additive and safe to re-run — `prevent_destroy` guards the existing containers
+and no state file is touched.
+
+**Then: policy, not quota.**
 
 Quota works out with no request. Every Azure region defaults to 4 vCPU here,
 and the workload divides into exactly 4-vCPU units:
