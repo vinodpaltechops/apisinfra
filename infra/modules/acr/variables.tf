@@ -35,7 +35,7 @@ variable "public_network_access_enabled" {
 
 variable "geo_replication_locations" {
   description = <<-EOT
-    Extra regions to replicate the registry into, e.g. ["centralindia"]. Must
+    Extra regions to replicate the registry into, e.g. ["indiasouthcentral"]. Must
     NOT include the registry's own location — Azure rejects that as a duplicate.
 
     Empty (default) generates no georeplications block at all, leaving Basic

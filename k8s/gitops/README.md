@@ -19,7 +19,7 @@ at a different path:
 | Cluster           | Region        | Root app          | Reads from          |
 | ----------------- | ------------- | ----------------- | ------------------- |
 | `aks-dev-lab-001` | southindia    | `root-app-dev`    | `k8s/gitops/apps/dev` |
-| `aks-dr-lab-001`  | centralindia  | `root-app-dr`     | `k8s/gitops/apps/dr`  |
+| `aks-dr-lab-001`  | indiasouthcentral | `root-app-dr`     | `k8s/gitops/apps/dr`  |
 
 The usual design — one Argo CD managing both clusters — was rejected for two
 reasons, and both matter more than the operational convenience it buys:

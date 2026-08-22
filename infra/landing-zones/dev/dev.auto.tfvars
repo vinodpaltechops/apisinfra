@@ -25,4 +25,4 @@ grant_vm_certificate_officer = true
 # registry on the recovery path — see the note in infra/landing-zones/dr/main.tf.
 #
 # acr_sku                       = "Premium"
-# acr_geo_replication_locations = ["centralindia"] # must match connectivity's dr_location
+# acr_geo_replication_locations = ["indiasouthcentral"] # must match connectivity's dr_location

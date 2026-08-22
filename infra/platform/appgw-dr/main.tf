@@ -5,7 +5,7 @@
 #
 #   1. It lives in the DR SPOKE's VNet, not the hub. An Application Gateway
 #      needs a subnet in its OWN region, and the hub VNet is in southindia — a
-#      gateway in centralindia simply cannot use a subnet there. The dev
+#      gateway in indiasouthcentral simply cannot use a subnet there. The dev
 #      gateway sits in the hub because that is where its region's shared
 #      network is; this one sits in the DR spoke for the same reason.
 #

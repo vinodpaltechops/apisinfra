@@ -15,7 +15,7 @@ backup store, and GitOps keeping both clusters on the same commit.
               priority 1        priority 2
                    │                 │
      ┌─────────────▼──────┐   ┌──────▼─────────────┐
-     │ agw-dev  southindia│   │ agw-dr centralindia│  App Gateway WAF_v2
+     │ agw-dev  southindia│   │ agw-dr  indiasouth │  App Gateway WAF_v2
      │ (hub VNet 10.0.7)  │   │ (DR spoke 10.5.7)  │  OWASP 3.2 + FDID lock
      └─────────┬──────────┘   └──────────┬─────────┘
                │ 10.1.2.250              │ 10.5.2.250
@@ -62,10 +62,18 @@ Which is why the backups are configured the way they are:
   snapshot is region-locked and cannot be restored in the DR region without an
   explicit cross-region copy. Snapshots are much faster per GB, which is exactly
   what makes them tempting — and they would fail the only restore that matters.
-- **RAGRS storage**, so the secondary copy is *readable* in centralindia with no
-  failover step. Plain GRS replicates identically but keeps the secondary
-  invisible until you initiate an account failover — a slow, account-wide
-  operation you do not want to discover mid-incident.
+- **RAGRS storage**, so the secondary copy is *readable* with no failover step.
+  Plain GRS replicates identically but keeps the secondary invisible until you
+  initiate an account failover — a slow, account-wide operation you do not want
+  to discover mid-incident.
+
+  Note where that secondary lands: **centralindia**, not the DR region.
+  Replication targets the Azure *pair* of the account's own region
+  (southindia → centralindia), and indiasouthcentral has no pair of its own. So
+  the DR cluster reads backups one region away rather than locally — RA-GRS
+  secondary endpoints are globally reachable, so this costs restore bandwidth
+  and latency, not correctness. The property that matters is preserved: the
+  backups are outside southindia.
 - **No storage account keys at all** (`shared_access_key_enabled = false`).
   Every caller presents an Entra token. A leaked key would otherwise bypass
   every other control on the one thing ransomware goes looking for.
@@ -84,14 +92,40 @@ Order matters. Layers 6–9 are the DR block in `terraform-deploy.yml`.
 9.   platform/frontdoor    global entry point
 ```
 
-**Before you start: quota.** The `dr` job creates a 2-node cluster (4 vCPU) in
-`dr_location`. centralindia currently has **zero** spare vCPU — the jump and
-mgmt VMs consume all 4 — so this job fails with a quota error until an increase
-is granted.
+**Before you start: policy, not quota.**
+
+Quota works out with no request. Every Azure region defaults to 4 vCPU here,
+and the workload divides into exactly 4-vCPU units:
+
+| Region | Holds | vCPU |
+| --- | --- | --- |
+| southindia | hub + dev spoke + dev AKS (2 nodes) | 4/4 |
+| centralindia | jump VNet + mgmt VM | 4/4 |
+| indiasouthcentral | DR spoke + DR AKS (2 nodes) | 4/4 |
+
+That is why DR sits in **indiasouthcentral** (Hyderabad) rather than
+centralindia — the jump and mgmt VMs already fill centralindia's 4.
+
+There is **no headroom** anywhere, and that has a consequence worth knowing
+before you need it: an AKS node-pool rotation or node-image upgrade needs a
+temporary surge of +2 vCPU, so both will fail at 4/4. Raise the relevant limit
+to 6 first.
 
 ```bash
-az vm list-usage --location centralindia -o table | grep -i "standard dav4\|total regional"
+az vm list-usage --location indiasouthcentral -o table | grep -iE "total regional|DASv5"
 ```
+
+What *does* need doing first is the **policy**. `allowed_locations` in
+`infra/platform/policies` feeds a Deny assignment at the org root, so any
+region missing from it fails the apply outright. `indiasouthcentral` is already
+added; if you change `dr_location` again, add the new region there too and
+apply that layer before the DR layer.
+
+> **Do not use westindia.** It cannot run AKS at all — absent from
+> `Microsoft.ContainerService/managedClusters`' location list, and
+> `az vm list-skus --location westindia` returns **zero** VM SKUs. It still
+> publishes vCPU quota entries, so checking quota alone makes it look like a
+> free, quota-unconstrained alternative.
 
 Then bootstrap GitOps into each cluster:
 
@@ -294,6 +328,17 @@ does not exist.
   resolver with it — the DR cluster keeps serving (its pods do not need the hub
   resolver for in-cluster DNS), but `kubectl` against its private API server
   from the mgmt VM would fail to resolve.
+- **The mgmt VM is in centralindia**, a third region — so managing the DR
+  cluster during a southindia outage depends on centralindia being up as well.
+- **Backups are not co-located with the DR cluster.** The RAGRS secondary lands
+  in centralindia (southindia's Azure pair); indiasouthcentral has no pair of
+  its own. Restores into DR therefore pull across a region boundary. Correct,
+  but slower than the earlier centralindia-DR design would have been — that is
+  the trade made to avoid a quota increase.
+- **Zero vCPU headroom in every region.** All three sit at 4/4, so an AKS
+  node-pool rotation or node-image upgrade — each needing a +2 vCPU surge —
+  fails until the limit is raised to 6. This is a latent operational blocker,
+  not just a capacity note: it blocks patching.
 - **DR capacity equals primary capacity, which is one node.** This is a warm
   standby sized for the current load, not headroom. Front Door sends *all*
   traffic to it on failover, and the HPA caps at 4 replicas with no cluster

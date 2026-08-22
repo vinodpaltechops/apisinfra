@@ -28,9 +28,13 @@
 #   geo-replication in dr_location — see acr_geo_replication_locations in
 #   infra/landing-zones/dev/dr.tf.
 #
-# Jump/mgmt VMs — the mgmt VM in centralindia already reaches this cluster's
-#   API server, because both are private endpoints resolved through the hub
-#   resolver and this spoke is peered to the hub.
+# Jump/mgmt VMs — the mgmt VM in centralindia already reaches this cluster's API
+#   server: both are private endpoints resolved through the hub resolver, and
+#   this spoke is peered to the hub.
+#
+#   Note this puts management in a THIRD region. Managing the DR cluster during
+#   a southindia outage therefore also depends on centralindia being up — one
+#   of the known gaps in docs/disaster-recovery.md.
 
 terraform {
   required_version = ">= 1.7.0"

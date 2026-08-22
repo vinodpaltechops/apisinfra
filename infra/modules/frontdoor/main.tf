@@ -5,7 +5,7 @@
 #   internet → app.<domain> (CNAME) → Front Door edge (anycast, ~100 PoPs)
 #            → origin group, PRIORITY-ordered
 #                priority 1 → agw-dev-* public IP (southindia)
-#                priority 2 → agw-dr-*  public IP (centralindia)
+#                priority 2 → agw-dr-*  public IP (indiasouthcentral)
 #            → App Gateway WAF_v2 → internal ingress LB → ingress-nginx → app
 #
 # ── Why Front Door and not Traffic Manager ────────────────────────────────────

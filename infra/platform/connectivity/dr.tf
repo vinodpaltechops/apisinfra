@@ -34,19 +34,59 @@ variable "enable_dr_region" {
 
 variable "dr_location" {
   description = <<-EOT
-    Azure region for the DR AKS cluster. Defaults to centralindia because it is
-    southindia's Azure PAIRED region, which matters twice over:
+    Azure region for the DR AKS cluster. indiasouthcentral (Hyderabad).
 
-      • a GRS storage account in southindia replicates its secondary INTO
-        centralindia, so Velero backups are physically present in the DR region
-        (see infra/platform/velero)
-      • paired regions are never updated by Azure at the same time
+    ── Why this region ─────────────────────────────────────────────────────────
+    Each region carries a default limit of 4 vCPU, and the workload divides into
+    exactly 4-vCPU units, so no part of this needs a quota request:
 
-    Change it if your vCPU quota increase lands somewhere else — nothing here
-    assumes the pair beyond those two properties.
+      southindia         hub + dev spoke + dev AKS (2 nodes)   4/4
+      centralindia       jump VNet + mgmt VM                   4/4
+      indiasouthcentral  DR spoke + DR AKS (2 nodes)           4/4
+
+    It is also genuinely separate infrastructure — Hyderabad, against Chennai
+    (southindia) and Pune (centralindia) — and it exposes 3 availability zones,
+    which neither of the other two does.
+
+    Note the zero headroom: an AKS node-pool rotation or node-image upgrade
+    needs a temporary surge of +2 vCPU, and at 4/4 that surge fails. Raise the
+    limit to 6 before attempting either.
+
+    ── What was given up ───────────────────────────────────────────────────────
+    indiasouthcentral has NO Azure paired region (`pairedRegion: []`), whereas
+    centralindia IS southindia's pair — and the earlier design leaned on that: a
+    geo-replicated account in southindia places its secondary in centralindia
+    automatically, co-locating backups with the DR cluster.
+
+    Geo-replication itself is unaffected: the Velero storage account lives in
+    southindia and its RAGRS secondary still lands in centralindia, whatever
+    this variable says. What changed is that the secondary is no longer in the
+    SAME region as the DR cluster, so during a southindia outage that cluster
+    reads backups from centralindia — one region away rather than local. RA-GRS
+    secondary endpoints are globally reachable, so the cost is restore
+    bandwidth and latency, not correctness.
+
+    ── Do NOT set this to westindia ────────────────────────────────────────────
+    West India cannot run AKS at all: it is absent from
+    Microsoft.ContainerService/managedClusters' location list, and
+    `az vm list-skus --location westindia` returns ZERO VM SKUs. It nonetheless
+    publishes vCPU quota entries (DASv5 limit 4), so quota output alone makes it
+    look like a viable, quota-free alternative. It is not.
+
+    ── If you change this again ────────────────────────────────────────────────
+    Check the region first — two of these three are easy to assume and wrong:
+
+      az provider show -n Microsoft.ContainerService \
+        --query "resourceTypes[?resourceType=='managedClusters'].locations[]" -o tsv
+      az vm list-skus --location <r> --size Standard_D2as --resource-type virtualMachines
+      az account list-locations --query "[?name=='<r>'].metadata.regionType" -o tsv
+
+    Then add the region to allowed_locations in infra/platform/policies. That
+    assignment is a DENY at the org root, so a region missing from it fails the
+    apply outright rather than warning.
   EOT
   type        = string
-  default     = "centralindia"
+  default     = "indiasouthcentral"
 }
 
 resource "azurerm_private_dns_zone" "aks_dr" {

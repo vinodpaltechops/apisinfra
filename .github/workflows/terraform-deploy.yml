@@ -90,10 +90,20 @@ jobs:
   # stack. Nothing above depends on anything below, so removing them is safe at
   # any time (destroy them first if they are already deployed).
   #
-  # QUOTA: the `dr` job creates a 2-node AKS cluster (4 vCPU) in dr_location.
-  # centralindia currently has 0 spare vCPU — the jump and mgmt VMs use all 4 —
-  # so this job FAILS with a quota error until an increase is granted. Request
-  # it before enabling: az vm list-usage --location centralindia -o table
+  # QUOTA: the `dr` job creates a 2-node AKS cluster (4 vCPU) in dr_location =
+  # indiasouthcentral, whose default limit is 4 and which nothing else uses. It
+  # fits with NO quota request — that is why this region was chosen over
+  # centralindia, where the jump and mgmt VMs already consume all 4.
+  #
+  # There is no headroom, though. A node-pool rotation or node-image upgrade
+  # needs a temporary surge of +2 vCPU and will fail at 4/4; raise the limit to
+  # 6 before attempting either.
+  #   az vm list-usage --location indiasouthcentral -o table
+  #
+  # POLICY: indiasouthcentral must be in allowed_locations
+  # (infra/platform/policies) — that assignment is a DENY at the org root, so
+  # every resource below is rejected without it. The pipeline already applies
+  # policies (job 2) before this block.
   # ─────────────────────────────────────────────────────────────────────────────
 
   # 6) DR landing zone — spoke + private AKS in the second region.

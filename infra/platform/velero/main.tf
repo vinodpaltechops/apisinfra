@@ -108,9 +108,15 @@ module "velero_backend" {
   storage_account_name = var.storage_account_name
   resource_group_name  = azurerm_resource_group.velero.name
 
-  # PRIMARY region. Geo-replication places the secondary copy in its Azure pair
-  # automatically — with dr_location = centralindia (southindia's pair), that
-  # secondary lands in the DR region, which is the entire point.
+  # PRIMARY region. Geo-replication places the secondary in southindia's Azure
+  # pair, which is centralindia — NOT in dr_location, since indiasouthcentral
+  # has no pairing of its own and pairing is a fixed property of the primary
+  # region, not a choice.
+  #
+  # So the DR cluster (indiasouthcentral) reads backups one region away rather
+  # than locally. RA-GRS secondary endpoints are globally reachable, so this
+  # costs restore bandwidth and latency, not correctness — and the backups are
+  # still outside southindia, which is the property that actually matters.
   location = var.location
 
   account_replication_type = var.account_replication_type

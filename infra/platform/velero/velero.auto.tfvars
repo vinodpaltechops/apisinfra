@@ -7,9 +7,14 @@ location = "southindia" # primary region — must match the dev landing zone
 # this and re-run; nothing else references the literal name.
 storage_account_name = "stovelerovinorg001"
 
-# RAGRS = geo-replicated WITH a readable secondary in centralindia. Downgrade
-# to "LRS" only if you have decided DR means "rebuild in the same region" —
-# LRS backups die with the region holding the cluster they protect.
+# RAGRS = geo-replicated WITH a readable secondary. The secondary lands in
+# southindia's Azure pair (centralindia), NOT in the DR region — pairing is a
+# fixed property of the primary region, and indiasouthcentral has no pair. The
+# DR cluster therefore reads backups one region away, which costs bandwidth and
+# latency but not correctness.
+#
+# Downgrade to "LRS" only if you have decided DR means "rebuild in the same
+# region" — LRS backups die with the region holding the cluster they protect.
 account_replication_type = "RAGRS"
 
 # Must exceed the longest backup TTL configured in

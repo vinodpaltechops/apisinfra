@@ -57,7 +57,7 @@ variable "acr_sku" {
 
 variable "acr_geo_replication_locations" {
   description = <<-EOT
-    Regions to geo-replicate the registry into for DR, e.g. ["centralindia"].
+    Regions to geo-replicate the registry into for DR, e.g. ["indiasouthcentral"].
     Empty (default) = today's single-region Basic registry, unchanged.
 
     Requires acr_sku = "Premium" — set both together in dev.auto.tfvars or the

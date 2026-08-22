@@ -4,7 +4,7 @@
 # This is the single most important choice in the file, and it is made for DR.
 #
 # An Azure managed-disk snapshot is REGION-LOCKED. A snapshot taken in
-# southindia cannot be attached to a node in centralindia without first being
+# southindia cannot be attached to a node in indiasouthcentral without first being
 # copied across regions — a manual, slow step you would be discovering during an
 # incident. Snapshots are also faster and cheaper, which is exactly why it is
 # tempting to configure them and then find out too late that they cannot leave
