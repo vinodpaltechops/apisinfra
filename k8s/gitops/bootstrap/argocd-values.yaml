@@ -1,0 +1,127 @@
+# Helm values for Argo CD. Installed ONCE per cluster by the
+# argocd-bootstrap workflow; everything afterwards is Argo CD managing itself
+# and the rest of the cluster from Git.
+#
+# ── One Argo CD per cluster, not one managing both ────────────────────────────
+# The usual picture is a single "hub" Argo CD driving every cluster. That is the
+# wrong shape here, for two reasons:
+#
+#   1. A hub in southindia is DOWN in exactly the scenario DR exists for. You
+#      would be reaching for the tool that redeploys your app at the moment the
+#      region hosting it is gone.
+#   2. Reaching the DR cluster from the primary means pod → private API server
+#      across non-transitive peering, plus an Azure-RBAC token via kubelogin.
+#      That is the most fragile link in the whole design, and a hub topology
+#      puts it directly on the recovery path.
+#
+# Per-cluster instances have exactly one external dependency each: GitHub.
+# Both clusters converge on the same commit independently, so a failover needs
+# no control-plane action at all.
+#
+# ── Sizing ────────────────────────────────────────────────────────────────────
+# The user node pool is a single Standard_D2as_v5 — 2 vCPU / 8 GiB, ~1900m
+# allocatable — already carrying ~440m of app requests plus ingress-nginx. Every
+# request below is deliberate; see k8s/gitops/README.md for the full budget.
+
+global:
+  # The system pool is tainted CriticalAddonsOnly, so everything lands on the
+  # user pool alongside the app. Moving Argo CD to the system pool instead
+  # (tolerations + this selector flipped to "system") is the right call if the
+  # user pool ever gets tight — Argo CD is platform, not workload.
+  nodeSelector:
+    nodepool-type: user
+
+# No SSO. Dex is a whole extra pod to broker an identity provider that does not
+# exist here; access is admin + port-forward from the mgmt VM.
+dex:
+  enabled: false
+
+# Not used: with one Argo CD per cluster there is no cluster generator to fan
+# out over, and the app-of-apps pattern covers everything else.
+#
+# NOTE: `applicationSet.enabled` does NOT exist in chart 7.x — unlike dex and
+# notifications, this component's Deployment template carries no conditional, so
+# setting `enabled: false` is silently ignored and the controller runs anyway.
+# replicas: 0 is the only way to end up with no pod. The Deployment object still
+# exists; it just never schedules anything.
+applicationSet:
+  replicas: 0
+
+# Slack/email notification routing — nothing to route to yet. Alerting on failed
+# syncs goes through Container Insights, which already scrapes this cluster.
+notifications:
+  enabled: false
+
+controller:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 150m
+      memory: 256Mi
+    limits:
+      # Memory only. The controller's reconcile loop is bursty by nature, and a
+      # CPU limit converts a burst into throttled latency on every sync while
+      # its request already guarantees it a share.
+      memory: 768Mi
+
+repoServer:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 192Mi
+    limits:
+      memory: 512Mi
+
+server:
+  replicas: 1
+
+  # ClusterIP, deliberately. The API server is private, the cluster has no
+  # public ingress, and the one ingress controller here is internal and fronted
+  # by an App Gateway carrying the APPLICATION's certificate. Exposing Argo CD
+  # through it would put the deployment control plane on the public edge.
+  # Reach it by port-forward from the mgmt VM — see k8s/gitops/README.md.
+  service:
+    type: ClusterIP
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+redis:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 192Mi
+
+configs:
+  params:
+    # Argo CD terminates TLS itself by default. Behind a port-forward that only
+    # produces a certificate warning on every login with nothing gained — the
+    # hop is a local tunnel over SSH. If you ever expose the UI properly, this
+    # must go back to false.
+    server.insecure: true
+
+    # One application controller, so it must handle every Application in the
+    # cluster. Sharding matters at hundreds of apps; here it is four.
+    controller.status.processors: "5"
+    controller.operation.processors: "2"
+
+  cm:
+    # Three minutes rather than the three-minute default's sibling behaviour:
+    # this is the fallback poll for repos with no webhook configured. Without a
+    # webhook from GitHub, this interval IS the deployment latency.
+    timeout.reconciliation: 180s
+
+    # Kustomize needs to be allowed to run `kustomize edit`-style build options;
+    # the overlays here use only plain patches, so no extra flags are required.
+
+  # PDBs are deliberately absent throughout this repo: on a single-node user
+  # pool a PDB makes the node undrainable, which blocks node-pool deletion and
+  # AKS upgrades alike. See the long note in k8s/base/content-api.yaml.

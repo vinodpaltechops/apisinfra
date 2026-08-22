@@ -1,0 +1,155 @@
+# Velero — PRIMARY cluster (aks-dev-lab-001).
+#
+# ── Filesystem backup, NOT disk snapshots ─────────────────────────────────────
+# This is the single most important choice in the file, and it is made for DR.
+#
+# An Azure managed-disk snapshot is REGION-LOCKED. A snapshot taken in
+# southindia cannot be attached to a node in centralindia without first being
+# copied across regions — a manual, slow step you would be discovering during an
+# incident. Snapshots are also faster and cheaper, which is exactly why it is
+# tempting to configure them and then find out too late that they cannot leave
+# the region they were taken in.
+#
+# Kopia filesystem backup reads the volume through the node agent and writes
+# into blob storage, which is geo-replicated. The DR cluster restores from the
+# same container with no copy step and no region awareness at all. Slower per
+# GB; the only option that actually crosses a region boundary.
+#
+# ── Authentication ────────────────────────────────────────────────────────────
+# Workload identity, so there is no credentials Secret in the cluster at all.
+# The chain is: pod label -> webhook injects a projected token -> Velero
+# exchanges it via the cluster's OIDC issuer -> Entra returns a token for the
+# user-assigned identity federated in infra/platform/velero.
+#
+# All four of these must agree or the exchange fails:
+#   namespace                velero          (the release namespace)
+#   serviceAccount.server.name   velero      (federated subject)
+#   the client-id annotation below
+#   the federated credential in infra/modules/velero-backend
+# A rename on any one of them fails with AADSTS70021 and every backup fails at
+# "failed to get credentials".
+
+# No credentials Secret — workload identity supplies the token.
+credentials:
+  useSecret: false
+
+serviceAccount:
+  server:
+    create: true
+    name: velero
+    annotations:
+      # ── REPLACE ME ──────────────────────────────────────────────────────────
+      # `terraform output -raw identity_client_id` in infra/platform/velero.
+      # The argocd-bootstrap workflow refuses to run while this placeholder is
+      # still here and prints the exact value to paste.
+      #
+      # This is the CLIENT id, not the principal/object id. Using the principal
+      # id fails at token exchange with "AADSTS700016: application not found",
+      # which reads like a missing app registration rather than a wrong GUID.
+      azure.workload.identity/client-id: "REPLACE_WITH_VELERO_IDENTITY_CLIENT_ID"
+
+# Required for the workload identity webhook to mutate the pod. Without this
+# label nothing is injected, and Velero falls back to looking for a credentials
+# file that does not exist.
+podLabels:
+  azure.workload.identity/use: "true"
+
+# The Azure object-store plugin ships separately from Velero itself and is
+# loaded as an init container into a shared volume.
+initContainers:
+  - name: velero-plugin-for-microsoft-azure
+    image: velero/velero-plugin-for-microsoft-azure:v1.11.1
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+      - mountPath: /target
+        name: plugins
+
+configuration:
+  backupStorageLocation:
+    - name: default
+      provider: azure
+      # Container name from the velero layer's `container_name` output.
+      bucket: velero
+      # ── The two clusters share one container ────────────────────────────────
+      # This prefix is what keeps them apart. It MUST differ from the DR
+      # cluster's ("dr/") — identical prefixes let two Velero instances each
+      # believe they own the same Kopia repository, and they will prune each
+      # other's backups as expired.
+      prefix: primary/
+      default: true
+      config:
+        resourceGroup: rg-velero-vinorg-001   # group holding the STORAGE ACCOUNT, not the cluster
+        storageAccount: stovelerovinorg001
+        subscriptionId: 9a80f875-0d94-48c9-9502-c7814477ffad
+        # Entra auth rather than a storage account key. The account is created
+        # with shared_access_key_enabled = false, so there is no key to fall
+        # back on — this is not optional.
+        useAAD: "true"
+
+  # Explicitly EMPTY, not merely omitted. The chart's own default for this key
+  # is a single-element list, so leaving it out does not mean "no snapshot
+  # location" — it renders a VolumeSnapshotLocation with an empty `provider`,
+  # which Velero rejects at startup and Argo CD reports as permanently
+  # progressing. `[]` is what actually suppresses it.
+  #
+  # Suppressed on purpose: a snapshot location would make snapshots the default
+  # path for CSI volumes and quietly reintroduce the region lock described in
+  # the header.
+  volumeSnapshotLocation: []
+
+  # Back up every pod volume by default, rather than requiring an opt-in
+  # annotation per pod. Opt-in is how volumes get silently missed: nobody
+  # notices an un-annotated pod until its data is the thing being restored.
+  defaultVolumesToFsBackup: true
+
+  # Keep a backup for 30 days unless its schedule says otherwise. Must stay
+  # BELOW backup_soft_delete_days in the velero Terraform layer, so that an
+  # expired-and-deleted backup is still recoverable from blob soft-delete.
+  defaultBackupTTL: 720h
+
+# The node agent (Kopia) is what actually reads volume contents. It is a
+# DaemonSet, so no node agent on a node means no volume data from that node —
+# the backup still reports Completed, carrying manifests but no files.
+deployNodeAgent: true
+
+nodeAgent:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      # Kopia buffers while hashing and uploading; too low a ceiling shows up as
+      # an OOMKilled node agent mid-backup, which surfaces as a partially failed
+      # backup rather than an obvious crash.
+      memory: 512Mi
+
+  # Run on EVERY node, including the CriticalAddonsOnly-tainted system pool.
+  # The app only runs on the user pool today, but a backup agent that covers
+  # some nodes is a backup you cannot reason about.
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+      effect: NoSchedule
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+# The server itself is not a DaemonSet; pin it beside the workloads it protects.
+nodeSelector:
+  nodepool-type: user
+
+# Velero's own CRDs are installed by an upgrade hook job by default. Argo CD
+# applies them from the chart directly with ServerSideApply, so the hook is
+# redundant and races the sync.
+upgradeCRDs: false
+cleanUpCRDs: false
+
+metrics:
+  # No Prometheus in these clusters — Container Insights scrapes stdout/stats.
+  enabled: false
+  serviceMonitor:
+    enabled: false

@@ -1,0 +1,55 @@
+# Content Hub application — PRIMARY cluster.
+#
+# This Application is what makes Argo CD, rather than the pipeline, the thing
+# that puts images on the cluster. app-deploy now builds, pushes, and commits a
+# new tag into k8s/overlays/dev/kustomization.yaml; Argo CD notices the commit
+# and rolls it out.
+#
+# The pipeline no longer runs `kubectl apply`, which removes its need for a
+# route to the private API server — and removes the class of drift where the
+# cluster runs something no commit describes.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: content-hub
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/vinodpaltechops/apisinfra.git
+    targetRevision: main
+    path: k8s/overlays/dev
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: content-hub
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      # AcrPull role assignments take a minute or two to propagate, so the very
+      # first sync after a fresh `terraform apply` can land in ImagePullBackOff
+      # and time out. This rides that out — the equivalent of the 300s rollout
+      # timeout the old pipeline used.
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m
+
+  # HPAs own replica counts, so a Deployment's `replicas` field drifts from Git
+  # by design. Without this, Argo CD reports the app permanently OutOfSync and
+  # selfHeal fights the autoscaler — scaling the app back down every reconcile,
+  # under exactly the load that made it scale up.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas

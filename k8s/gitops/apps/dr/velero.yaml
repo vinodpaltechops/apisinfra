@@ -1,0 +1,48 @@
+# Velero — DR cluster.
+#
+# Identical to the primary's Application except for the values file, which adds
+# the read-only BackupStorageLocation pointing at the primary's prefix.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: velero
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  sources:
+    - repoURL: https://vmware-tanzu.github.io/helm-charts
+      chart: velero
+      # MUST match the primary's pin — a backup written by one Kopia repository
+      # format is not guaranteed readable by a different one, and this cluster
+      # exists to read the primary's backups.
+      targetRevision: 8.2.0
+      helm:
+        releaseName: velero
+        valueFiles:
+          - $values/k8s/gitops/platform/velero/values-dr.yaml
+    - repoURL: https://github.com/vinodpaltechops/apisinfra.git
+      targetRevision: main
+      ref: values
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: velero
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 20s
+        factor: 2
+        maxDuration: 3m

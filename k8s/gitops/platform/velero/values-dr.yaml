@@ -1,0 +1,115 @@
+# Velero — DR cluster (aks-dr-lab-001).
+#
+# Same backup store, same identity, same everything except TWO settings:
+#
+#   prefix              dr/  — keeps this cluster's Kopia repository separate
+#   backupStorageLocation
+#     accessMode        ReadOnly (see below)
+#
+# Read k8s/gitops/platform/velero/values-dev.yaml first — the reasoning for
+# filesystem backup over snapshots, and for workload identity, is there and is
+# not repeated.
+
+credentials:
+  useSecret: false
+
+serviceAccount:
+  server:
+    create: true
+    name: velero
+    annotations:
+      # ── REPLACE ME ──────────────────────────────────────────────────────────
+      # THE SAME client id as values-dev.yaml. Both clusters federate into ONE
+      # managed identity — that is what lets this cluster read backups the
+      # primary wrote, without copying anything.
+      azure.workload.identity/client-id: "REPLACE_WITH_VELERO_IDENTITY_CLIENT_ID"
+
+podLabels:
+  azure.workload.identity/use: "true"
+
+initContainers:
+  - name: velero-plugin-for-microsoft-azure
+    image: velero/velero-plugin-for-microsoft-azure:v1.11.1
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+      - mountPath: /target
+        name: plugins
+
+configuration:
+  backupStorageLocation:
+    # ── 1) This cluster's OWN backups ───────────────────────────────────────
+    # The DR cluster is warm, not idle — it runs the same workloads, so its
+    # state is worth protecting too. Distinct prefix, or the two Velero
+    # instances each assume ownership of one Kopia repository and prune each
+    # other's backups as expired.
+    - name: default
+      provider: azure
+      bucket: velero
+      prefix: dr/
+      default: true
+      config:
+        resourceGroup: rg-velero-vinorg-001
+        storageAccount: stovelerovinorg001
+        subscriptionId: 9a80f875-0d94-48c9-9502-c7814477ffad
+        useAAD: "true"
+
+    # ── 2) The PRIMARY cluster's backups, READ-ONLY ─────────────────────────
+    # This is the location a DR restore actually reads from, and the reason the
+    # design works: the DR cluster can see primary backups directly, with no
+    # copy step and nothing to run during the incident.
+    #
+    # ReadOnly is load-bearing. Without it this Velero would treat the primary's
+    # Kopia repository as its own and start expiring the primary's backups
+    # against its own retention clock — destroying, in the standby, exactly the
+    # thing the standby exists to restore from.
+    - name: primary-readonly
+      provider: azure
+      bucket: velero
+      prefix: primary/
+      default: false
+      accessMode: ReadOnly
+      config:
+        resourceGroup: rg-velero-vinorg-001
+        storageAccount: stovelerovinorg001
+        subscriptionId: 9a80f875-0d94-48c9-9502-c7814477ffad
+        useAAD: "true"
+
+  # Explicitly EMPTY — see values-dev.yaml. Omitting this key renders a
+  # VolumeSnapshotLocation with an empty `provider`, because the chart's default
+  # is a one-element list rather than an empty one.
+  volumeSnapshotLocation: []
+
+  defaultVolumesToFsBackup: true
+  defaultBackupTTL: 720h
+
+deployNodeAgent: true
+
+nodeAgent:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+      effect: NoSchedule
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+nodeSelector:
+  nodepool-type: user
+
+upgradeCRDs: false
+cleanUpCRDs: false
+
+metrics:
+  enabled: false
+  serviceMonitor:
+    enabled: false

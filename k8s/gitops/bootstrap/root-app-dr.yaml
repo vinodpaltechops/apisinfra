@@ -1,0 +1,38 @@
+# ROOT APPLICATION (app-of-apps) — DR cluster, aks-dr-lab-001.
+#
+# Identical to root-app-dev.yaml except for `path`. That single-line difference
+# is the entire multi-cluster design: two independent Argo CD instances, one
+# repo, two directories.
+#
+# Because this cluster converges on the repo by itself, a failover requires no
+# deployment action. The DR cluster is already running the same commit as the
+# primary before the incident starts — which is what makes the RTO the DNS/Front
+# Door failover time rather than a redeploy.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root-dr
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/vinodpaltechops/apisinfra.git
+    targetRevision: main
+    path: k8s/gitops/apps/dr
+    directory:
+      recurse: true
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

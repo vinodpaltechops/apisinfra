@@ -1,0 +1,45 @@
+# Content Hub application — DR cluster.
+#
+# Points at k8s/overlays/dr, which pins the same images as the dev overlay.
+# Because this Application syncs continuously, the DR cluster is already running
+# the current release BEFORE any incident — the standby is warm, not cold.
+#
+# That is what keeps the RTO down to Front Door's failover window (~2 minutes of
+# failed health probes) rather than the time it takes to deploy an application.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: content-hub
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/vinodpaltechops/apisinfra.git
+    targetRevision: main
+    path: k8s/overlays/dr
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: content-hub
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m
+
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
