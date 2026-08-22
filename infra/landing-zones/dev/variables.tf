@@ -50,9 +50,22 @@ variable "acr_name" {
 }
 
 variable "acr_sku" {
-  description = "Basic is enough for this lab. Premium only if you move the registry behind a private endpoint."
+  description = "Basic is enough for this lab. Premium only if you move the registry behind a private endpoint, or geo-replicate it for DR (see acr_geo_replication_locations)."
   type        = string
   default     = "Basic"
+}
+
+variable "acr_geo_replication_locations" {
+  description = <<-EOT
+    Regions to geo-replicate the registry into for DR, e.g. ["centralindia"].
+    Empty (default) = today's single-region Basic registry, unchanged.
+
+    Requires acr_sku = "Premium" — set both together in dev.auto.tfvars or the
+    apply fails the module's validation. Premium is roughly 10x Basic, which is
+    the real reason this is off by default rather than a technical one.
+  EOT
+  type        = list(string)
+  default     = []
 }
 
 variable "ssh_public_key" {

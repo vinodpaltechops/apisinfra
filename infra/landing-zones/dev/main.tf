@@ -288,6 +288,12 @@ module "acr" {
   sku                        = var.acr_sku
   kubelet_identity_object_id = module.aks.kubelet_identity
   tags                       = local.tags
+
+  # Empty by default — no geo-replication, registry unchanged. Populate it (and
+  # move acr_sku to "Premium") only if you want the DR region to pull from a
+  # local replica instead of reaching back into southindia. See
+  # dev.auto.tfvars for the switch and the cost note.
+  geo_replication_locations = var.acr_geo_replication_locations
 }
 
 # ── Storage account behind a private endpoint ─────────────────────────────────

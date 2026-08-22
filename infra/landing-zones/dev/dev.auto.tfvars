@@ -14,3 +14,15 @@ mgmt_ssh_source_prefix = "163.223.165.0/24"   # SSH into the public mgmt VM
 # private keys. The gateway keeps working — it reads the cert with its own
 # identity, which only needs Secrets User.
 grant_vm_certificate_officer = true
+
+# ── DR: registry geo-replication ──────────────────────────────────────────────
+# OFF by default — the registry stays Basic and single-region, exactly as it is
+# today. Uncomment BOTH lines together to give the DR cluster a local replica;
+# the module validation rejects the list without the Premium SKU.
+#
+# The trade-off is cost, not risk: Premium is ~10x Basic. Leaving this off means
+# the DR cluster pulls across regions from southindia, which works but puts the
+# registry on the recovery path — see the note in infra/landing-zones/dr/main.tf.
+#
+# acr_sku                       = "Premium"
+# acr_geo_replication_locations = ["centralindia"] # must match connectivity's dr_location

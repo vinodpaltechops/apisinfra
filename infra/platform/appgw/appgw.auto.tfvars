@@ -37,3 +37,20 @@ key_vault_id                        = "/subscriptions/9a80f875-0d94-48c9-9502-c7
 # ["Internet"] = a genuinely public site. While testing you can narrow this to
 # your own ISP range, e.g. ["163.223.165.0/24"], and widen it once it works.
 allowed_source_prefixes = ["Internet"]
+
+# ── DR: hand the public edge over to Front Door ───────────────────────────────
+# Both settings below are the SECOND half of the cutover. Do them only after
+# app.sometestdemo.in is a CNAME to the Front Door endpoint (see the
+# `dns_records` output of infra/platform/frontdoor) — applying them while the A
+# record still points here takes the site down.
+#
+# Order matters:
+#   1. apply frontdoor  → gives you the GUID below
+#   2. cut DNS over, confirm the site serves through Front Door
+#   3. uncomment BOTH lines and re-apply this layer
+#
+# To roll back to single-region, reverse it: comment these out, re-apply, then
+# restore the A record to appgw_public_ip.
+#
+# allowed_source_prefixes = ["AzureFrontDoor.Backend"] # replaces ["Internet"] above
+# frontdoor_id            = "00000000-0000-0000-0000-000000000000"
