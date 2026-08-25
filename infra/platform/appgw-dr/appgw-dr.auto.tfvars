@@ -19,13 +19,36 @@ allowed_source_prefixes = ["AzureFrontDoor.Backend"]
 #
 # frontdoor_id = "00000000-0000-0000-0000-000000000000"
 
+# ── STALE VAULT REFERENCE — read before flipping enable_https back to true ────
+# The IDs below name kv-dev-lab-d5f9ug, the vault from a PREVIOUS deployment,
+# which no longer exists — the stack is currently torn down.
+#
+# The keyvault module names the vault kv-${env}-lab-${random_string.suffix}, so
+# a fresh apply generates a DIFFERENT suffix. A gateway pointed at the old name
+# fails fetching the certificate with ApplicationGatewayKeyVaultSecretAccessDenied,
+# which reads like an RBAC problem rather than a wrong name.
+#
+# enable_https is therefore false for the rebuild, matching appgw.auto.tfvars.
+# HTTP-only is a complete configuration here, not a broken one.
+#
+# Turn TLS back on in BOTH files together, after the dev landing zone exists:
+#   1. terraform -chdir=infra/landing-zones/dev output key_vault_uri
+#   2. import the cert into THAT vault, from the mgmt VM (docs/public-endpoint.md)
+#   3. replace both IDs here and in appgw.auto.tfvars
+#   4. enable_https = true, re-apply both gateway layers
+#
+# NOTE for Front Door: with HTTP-only origins, set forwarding_protocol =
+# "HttpOnly" in frontdoor.auto.tfvars for the initial test, or Front Door tries
+# 443 against a gateway with no HTTPS listener and every origin reports
+# unhealthy. Move both to HTTPS together once the certificate is in place.
+
 # ── TLS — the SAME certificate as the primary gateway ─────────────────────────
 # Both gateways serve app_fqdn, so both present a certificate for it. Sharing
 # one vault entry means one renewal; a per-region copy is how a certificate ends
 # up expired in exactly the region you fail over to.
 #
 # Unversioned secret URL, so a rotation is picked up without a Terraform change.
-enable_https           = true
+enable_https           = false
 http_redirect_to_https = false
 
 ssl_certificate_key_vault_secret_id = "https://kv-dev-lab-d5f9ug.vault.azure.net/secrets/app-tls"

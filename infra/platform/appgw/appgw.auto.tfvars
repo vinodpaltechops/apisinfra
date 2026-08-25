@@ -15,13 +15,38 @@ waf_mode = "Prevention"
 # false = HTTP only. Flip to true once the certificate is in Key Vault and the
 # two settings below are filled in. Toggling does not change the public IP, so
 # the GoDaddy A record keeps working either way.
-enable_https = true
+enable_https = false
 
 # Only read when enable_https = true.
 #   true  — :80 permanently redirects to :443 (right answer for a public site)
 #   false — :80 keeps serving the app too, so http:// and https:// both work
 http_redirect_to_https = false
 
+# ── STALE VAULT REFERENCE — read before flipping enable_https back to true ────
+# The two IDs below name kv-dev-lab-d5f9ug, the vault from a PREVIOUS
+# deployment. That vault no longer exists: the whole stack is currently torn
+# down (only rg-tfstate-vinorg-001 remains).
+#
+# The keyvault module names the vault kv-${env}-lab-${random_string.suffix}
+# (infra/modules/keyvault/main.tf), so a fresh apply generates a DIFFERENT
+# 6-character suffix. Pointing a gateway at the old name fails when it tries to
+# fetch the certificate, and the error surfaces as
+# ApplicationGatewayKeyVaultSecretAccessDenied — which reads like an RBAC
+# problem, not a wrong-name problem.
+#
+# So enable_https is false for the rebuild. That is a COMPLETE configuration,
+# not a broken one: the gateway serves the app on :80 and needs no certificate
+# at all. After the dev landing zone applies:
+#
+#   1. terraform -chdir=infra/landing-zones/dev output key_vault_uri
+#   2. import the cert into THAT vault (see docs/public-endpoint.md — it must be
+#      done from inside the VNet, i.e. from the mgmt VM)
+#   3. replace both IDs here AND in appgw-dr.auto.tfvars with the new name
+#   4. set enable_https = true and re-apply both gateway layers
+#
+# Both files must be updated together — the two gateways share one certificate
+# precisely so there is only ever one renewal to remember.
+#
 # Import the certificate into Key Vault first (portal or
 # `az keyvault certificate import`, from inside the VNet — the vault has no
 # public endpoint), then uncomment both. Use the UNVERSIONED secret URL so the
