@@ -4,7 +4,7 @@ kind: Kustomization
 namespace: content-hub
 
 resources:
-  - ../../base
+- ../../base
 
 # The registry name comes from the dev landing zone's `acr_login_server` output.
 # CI overwrites the tags in place with:
@@ -13,22 +13,22 @@ resources:
 # Tags are immutable git SHAs, never `latest`: a mutable tag makes a rollout
 # unreproducible and defeats `kubectl rollout undo`.
 images:
-  - name: content-api
-    newName: acrdevvinorg001.azurecr.io/content-hub/content-api
-    newTag: latest
-  - name: backend
-    newName: acrdevvinorg001.azurecr.io/content-hub/backend
-    newTag: latest
-  - name: frontend
-    newName: acrdevvinorg001.azurecr.io/content-hub/frontend
-    newTag: latest
+- name: backend
+  newName: acrdevvinorg001.azurecr.io/content-hub/backend
+  newTag: 70ad3f6dbaaf1c53ee50aed4a1dabb8ed18a124c
+- name: content-api
+  newName: acrdevvinorg001.azurecr.io/content-hub/content-api
+  newTag: 70ad3f6dbaaf1c53ee50aed4a1dabb8ed18a124c
+- name: frontend
+  newName: acrdevvinorg001.azurecr.io/content-hub/frontend
+  newTag: 70ad3f6dbaaf1c53ee50aed4a1dabb8ed18a124c
 
 # Images always come from the registry in the cluster — IfNotPresent would let
 # a stale node-cached layer win when a tag is ever reused.
 patches:
-  - target:
-      kind: Deployment
-    patch: |
-      - op: replace
-        path: /spec/template/spec/containers/0/imagePullPolicy
-        value: Always
+- patch: |
+    - op: replace
+      path: /spec/template/spec/containers/0/imagePullPolicy
+      value: Always
+  target:
+    kind: Deployment
