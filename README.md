@@ -73,6 +73,7 @@ k8s/gitops/    Argo CD: root apps, Velero config, backup schedules
 - [k8s/README.md](k8s/README.md) — deploy runbook, access path, troubleshooting
 - [k8s/gitops/README.md](k8s/gitops/README.md) — Argo CD topology, resource budget
 - [docs/disaster-recovery.md](docs/disaster-recovery.md) — DR architecture + runbooks
+- [docs/dr-reference.md](docs/dr-reference.md) — DR complete reference: inventory, RTO/RPO derivation, backup/restore mechanics, failover timelines
 
 Pipelines: `argocd-bootstrap` (once per cluster) then `app-deploy` (build → ACR
 → commit the tag → Argo CD rolls it out). `app-deploy` no longer touches the
