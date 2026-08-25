@@ -450,7 +450,28 @@ resource "azurerm_application_gateway" "this" {
     }
   }
 
-  depends_on = [azurerm_subnet_network_security_group_association.appgw]
+  # The Key Vault role assignment MUST be listed here. Nothing in the
+  # configuration links the gateway to it — the gateway references the secret by
+  # URL, which is just a string — so without this Terraform is free to create
+  # both concurrently. The gateway then fetches the certificate before its
+  # identity has been granted anything and the create fails with:
+  #
+  #   ApplicationGatewayKeyVaultSecretAccessDenied
+  #   "Access denied for KeyVault Secret ..."
+  #
+  # It is a race, so it fails only sometimes, and the error blames the identity
+  # and the vault firewall — both of which are usually already correct. That
+  # combination costs a lot of time to diagnose.
+  #
+  # NOTE this ordering fix does NOT cover a MISSING secret. Azure returns the
+  # same "Access denied" for a secret that does not exist as for one you cannot
+  # read, so if the certificate has never been imported into the vault, the
+  # message is identical and no amount of dependency ordering helps. Check the
+  # secret exists first — see docs/public-endpoint.md.
+  depends_on = [
+    azurerm_subnet_network_security_group_association.appgw,
+    azurerm_role_assignment.appgw_kv_secrets,
+  ]
 
   lifecycle {
     # Cross-variable checks — a variable validation block can only see its own
