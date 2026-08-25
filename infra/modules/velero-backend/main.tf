@@ -31,6 +31,11 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 3.110"
     }
+    # Used only for the RBAC-propagation wait before the container is created.
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.11"
+    }
   }
 }
 
@@ -80,6 +85,38 @@ resource "azurerm_storage_account" "velero" {
   tags = var.tags
 }
 
+# ── Data-plane access for whoever runs Terraform ──────────────────────────────
+# Creating a container is a DATA-PLANE operation, and this account has no keys.
+# Control-plane Owner — which the CI service principal holds at the root
+# management group — carries no dataActions at all, so it cannot create a
+# container here. That is the second half of the KeyBasedAuthenticationNotPermitted
+# failure: `storage_use_azuread = true` on the provider makes it present an
+# Entra token, and this assignment is what that token needs to be worth
+# anything.
+#
+# Storage Blob Data Owner rather than Contributor: container create/delete sits
+# under Owner in the data-plane role split.
+#
+# This is Terraform's own access, entirely separate from the Velero identity's
+# assignment above. Both are needed and they are not interchangeable.
+data "azurerm_client_config" "deployer" {}
+
+resource "azurerm_role_assignment" "deployer_blob" {
+  scope                = azurerm_storage_account.velero.id
+  role_definition_name = "Storage Blob Data Owner"
+  principal_id         = data.azurerm_client_config.deployer.object_id
+}
+
+# Data-plane RBAC is NOT effective immediately — propagation runs from seconds
+# to a few minutes, and the container create below would otherwise race it and
+# fail with AuthorizationPermissionMismatch on a fresh account. That failure is
+# transient and self-correcting on a re-run, which is exactly what makes it
+# expensive: the pipeline goes red for no lasting reason.
+resource "time_sleep" "wait_for_rbac" {
+  depends_on      = [azurerm_role_assignment.deployer_blob]
+  create_duration = "120s"
+}
+
 # azurerm 3.x addresses the account by NAME here (storage_account_id is the
 # 4.x form). The provider is pinned to ~> 3.110 repo-wide, so this is the
 # correct argument — swapping it is part of a provider major upgrade, not a
@@ -88,6 +125,8 @@ resource "azurerm_storage_container" "velero" {
   name                  = var.container_name
   storage_account_name  = azurerm_storage_account.velero.name
   container_access_type = "private"
+
+  depends_on = [time_sleep.wait_for_rbac]
 }
 
 # ── Velero's identity ─────────────────────────────────────────────────────────

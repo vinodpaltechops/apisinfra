@@ -147,16 +147,41 @@ jobs:
     with: { layer_path: infra/platform/appgw-dr, apply: true }
     secrets: inherit
 
-  # 9) Front Door — LAST, because it consumes both gateways' public IPs as
-  #    origins.
+  # 9) Front Door — DISABLED: not available on this subscription.
   #
-  #    Applying it does NOT change what users see: app_fqdn still resolves to
-  #    the primary gateway's A record until you cut DNS over by hand. Run
-  #    `terraform output dns_records` in this layer for the two records, and see
-  #    docs/disaster-recovery.md for the full cutover, which is deliberately
-  #    manual and reversible.
-  frontdoor:
-    needs: [appgw, appgw-dr]
-    uses: ./.github/workflows/tf-layer.yml
-    with: { layer_path: infra/platform/frontdoor, apply: true }
-    secrets: inherit
+  #    Azure refuses Front Door on Free Trial and Student subscriptions:
+  #      Code="BadRequest" Message="Free Trial and Student account is forbidden
+  #      for Azure Frontdoor resources."
+  #    Confirm with:
+  #      az rest --method get --url \
+  #        "https://management.azure.com/subscriptions/<sub>?api-version=2020-01-01" \
+  #        --query subscriptionPolicies.quotaId      # -> FreeTrial_2014-09-01
+  #
+  #    This is a subscription restriction, not a configuration error — no
+  #    Terraform change gets past it. The layer, module and tfvars are all kept
+  #    intact and correct; only this job is commented out.
+  #
+  #    WITHOUT Front Door there is no automatic failover. Both App Gateways are
+  #    reachable on their own public IPs, and failover is tested by moving the
+  #    DNS A record between them by hand — see "Manual failover" in
+  #    docs/disaster-recovery.md. That still exercises everything that actually
+  #    matters for DR: the second region, its cluster, its gateway, and Velero
+  #    restoring across regions.
+  #
+  #    TO RE-ENABLE, after upgrading to Pay-As-You-Go — all four together:
+  #      1. uncomment this job
+  #      2. appgw-dr.auto.tfvars:  allowed_source_prefixes back to
+  #                               ["AzureFrontDoor.Backend"]
+  #      3. apply, then set frontdoor_id in BOTH gateway tfvars and re-apply
+  #      4. DNS: replace the A record with the CNAME from `terraform output
+  #         dns_records`
+  #
+  #    NOTE: rg-frontdoor-vinorg-001 already exists — the layer got as far as the
+  #    resource group before the profile was refused. It is empty and costs
+  #    nothing; re-enabling picks up from there.
+  #
+  # frontdoor:
+  #   needs: [appgw, appgw-dr]
+  #   uses: ./.github/workflows/tf-layer.yml
+  #   with: { layer_path: infra/platform/frontdoor, apply: true }
+  #   secrets: inherit

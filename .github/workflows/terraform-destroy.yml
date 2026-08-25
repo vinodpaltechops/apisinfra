@@ -57,6 +57,13 @@ jobs:
   # 0a) Front Door — outermost. Before this runs, point app_fqdn back at the
   #     primary gateway's A record: destroying Front Door while the CNAME still
   #     targets its endpoint is a hard outage, not a graceful fallback.
+  #
+  #     KEPT ENABLED even though the matching DEPLOY job is commented out (Front
+  #     Door is forbidden on Free Trial subscriptions). That is deliberate, not
+  #     an oversight: the layer got as far as creating rg-frontdoor-vinorg-001
+  #     before the profile was refused, so there IS state to tear down. A destroy
+  #     against a layer holding only a resource group succeeds cleanly, and
+  #     removing this job would strand that group outside Terraform's knowledge.
   frontdoor:
     needs: guard
     uses: ./.github/workflows/tf-layer.yml

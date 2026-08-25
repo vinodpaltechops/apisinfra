@@ -31,6 +31,33 @@ backup store, and GitOps keeping both clusters on the same commit.
               dr/       ← written by dr
 ```
 
+> ## ⚠ Current deployment: no Front Door
+>
+> Azure **forbids Front Door on Free Trial and Student subscriptions**:
+>
+> ```
+> Code="BadRequest" Message="Free Trial and Student account is forbidden
+> for Azure Frontdoor resources."
+> ```
+>
+> This subscription is `FreeTrial_2014-09-01`, so the `frontdoor` job is
+> commented out of `terraform-deploy.yml`. The layer, module and tfvars are
+> intact and correct — it is a subscription restriction, not a config error.
+>
+> **What still works:** everything that makes DR real. Two regions, two private
+> AKS clusters, two App Gateways, Argo CD converging both on the same commit,
+> and Velero restoring a primary-region backup into the DR cluster.
+>
+> **What does not:** automatic failover. There is no health probe shifting
+> traffic on its own, so the region-loss RTO below does **not** apply as
+> written — see *Manual failover* in §8. Both gateways are reachable on their
+> own public IPs and you move the DNS A record between them by hand.
+>
+> To restore the designed behaviour, upgrade to Pay-As-You-Go and follow the
+> four-step re-enable list in `terraform-deploy.yml`. Be aware that lifting the
+> spending limit starts real billing — the two App Gateway WAF_v2 instances
+> alone are the dominant cost.
+
 ## Objectives, and what actually determines them
 
 | | Target | What sets it |
@@ -185,7 +212,40 @@ everything, health probes included.
 
 # Runbooks
 
-## 1. Region failure — the primary is gone
+## 0. Manual failover (current setup — no Front Door)
+
+Until Front Door is available, failover is a DNS change you make. Get both
+gateway IPs:
+
+```bash
+terraform -chdir=infra/platform/appgw    output -raw appgw_public_ip   # southindia
+terraform -chdir=infra/platform/appgw-dr output -raw appgw_public_ip   # indiasouthcentral
+```
+
+Both gateways serve the same `app_fqdn` on host-based listeners and read the
+same certificate, so they are interchangeable targets — point the `app` A
+record at whichever region you want live.
+
+```bash
+# verify the DR gateway serves the app BEFORE you need it
+curl -H "Host: app.sometestdemo.in" http://<dr-gateway-ip>/healthz
+```
+
+Run that check on a schedule. It is the whole reason to have a warm standby,
+and the failure it catches — a DR region that quietly stopped serving — is
+invisible until the moment you depend on it.
+
+Two properties to keep in mind, both consequences of DNS rather than anycast:
+
+- **RTO is TTL-bound.** The record is at 600s, so budget ~10 minutes plus
+  whatever clients cache beyond their instructions. Some cache far longer.
+- **Nothing is automatic.** A region can fail at 3am and the site stays down
+  until a human changes DNS. That gap is precisely what Front Door closes, and
+  it is the honest reason this is a stopgap rather than a design.
+
+---
+
+## 1. Region failure — the primary is gone (WITH Front Door)
 
 **Front Door handles this on its own.** There is no action to take to restore
 service. Verify, then investigate.

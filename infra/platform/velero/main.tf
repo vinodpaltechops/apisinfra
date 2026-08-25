@@ -25,6 +25,10 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 3.110"
     }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.11"
+    }
   }
   backend "azurerm" {
     resource_group_name  = "rg-tfstate-vinorg-001"
@@ -40,6 +44,22 @@ provider "azurerm" {
       prevent_deletion_if_contains_resources = false
     }
   }
+
+  # ── REQUIRED because the backup store has shared_access_key_enabled = false ──
+  # Without this the provider performs its data-plane calls — the post-create
+  # "waiting for the Blob Service to become available" poll, and every
+  # azurerm_storage_container operation — using an ACCOUNT KEY. On a
+  # keys-disabled account Azure rejects those with:
+  #
+  #   403 Key based authentication is not permitted on this storage account
+  #   (KeyBasedAuthenticationNotPermitted)
+  #
+  # which reads like a permissions problem and is actually the provider
+  # reaching for a credential that deliberately does not exist.
+  #
+  # This flag switches those calls to Entra tokens. It is provider-wide, but
+  # this layer manages nothing else in Storage, so the blast radius is nil.
+  storage_use_azuread = true
 }
 
 locals {

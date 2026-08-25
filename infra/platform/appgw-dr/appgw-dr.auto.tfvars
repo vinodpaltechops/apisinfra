@@ -9,7 +9,22 @@ app_fqdn = "app.sometestdemo.in" # MUST match the primary gateway
 waf_mode = "Prevention"
 
 # Only Front Door may reach this gateway. See variables.tf before widening.
-allowed_source_prefixes = ["AzureFrontDoor.Backend"]
+# ── Internet, because Front Door does not exist on this subscription ──────────
+# Azure forbids Front Door on Free Trial subscriptions
+# (quotaId FreeTrial_2014-09-01): "Free Trial and Student account is forbidden
+# for Azure Frontdoor resources". The frontdoor layer is therefore commented out
+# of the deploy pipeline.
+#
+# ["AzureFrontDoor.Backend"] — the correct value WITH Front Door — would leave
+# this gateway admitting traffic only from a service that is not deployed, i.e.
+# unreachable by anything at all. Failover is tested here by moving the DNS A
+# record between the two gateway IPs, so this one has to be reachable.
+#
+# PUT THIS BACK to ["AzureFrontDoor.Backend"] at the same time you re-enable the
+# frontdoor layer and set frontdoor_id. Leaving it as Internet once Front Door
+# is live means anyone who finds the origin IP bypasses Front Door's WAF,
+# routing and failover entirely.
+allowed_source_prefixes = ["Internet"]
 
 # ── Two-pass bootstrap ────────────────────────────────────────────────────────
 # Leave this commented on the FIRST apply — Front Door does not exist yet, and
