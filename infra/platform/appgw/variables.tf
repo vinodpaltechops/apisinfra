@@ -26,9 +26,26 @@ variable "waf_mode" {
 }
 
 variable "allowed_source_prefixes" {
-  description = "Who may reach 80/443. Keep as [\"Internet\"] for a public site, or narrow to your own CIDR while testing."
+  description = "Who may reach 80/443. Keep as [\"Internet\"] for a public site, or narrow to your own CIDR while testing. Once Front Door fronts this gateway, narrow it to [\"AzureFrontDoor.Backend\"] — but only AFTER the DNS cutover, or you cut off every direct visitor."
   type        = list(string)
   default     = ["Internet"]
+}
+
+variable "frontdoor_id" {
+  description = <<-EOT
+    Front Door profile GUID (infra/platform/frontdoor's frontdoor_id output).
+
+    null (default) = no WAF origin-lock rule, and this gateway stays the
+    directly-reachable public entry point it is today.
+
+    Set it after Front Door exists and the DNS cutover is done. The WAF then
+    rejects requests whose X-Azure-FDID header is missing or wrong, which is
+    what prevents someone reaching the origin IP directly and bypassing Front
+    Door's WAF and failover. Setting it BEFORE Front Door exists blocks all
+    traffic, health probes included.
+  EOT
+  type        = string
+  default     = null
 }
 
 # ── TLS ───────────────────────────────────────────────────────────────────────

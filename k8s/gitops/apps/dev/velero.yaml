@@ -1,0 +1,54 @@
+# Velero — PRIMARY cluster.
+#
+# Sync wave -1 so this settles BEFORE the backup schedules (wave 0) that create
+# Schedule CRs. Applying a Schedule before Velero's CRDs exist fails the sync
+# with "no matches for kind Schedule", which then needs a manual retry.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: velero
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  sources:
+    - repoURL: https://vmware-tanzu.github.io/helm-charts
+      chart: velero
+      # Pinned. An unpinned chart is how the two clusters end up on different
+      # Velero versions — and a backup written by a newer Kopia repository
+      # format is not necessarily readable by an older one, which breaks the
+      # cross-region restore this whole design rests on.
+      targetRevision: 8.2.0
+      helm:
+        releaseName: velero
+        valueFiles:
+          - $values/k8s/gitops/platform/velero/values-dev.yaml
+    - repoURL: https://github.com/vinodpaltechops/apisinfra.git
+      targetRevision: main
+      ref: values
+
+  destination:
+    server: https://kubernetes.default.svc
+    # MUST be "velero" — it forms half the federated credential subject
+    # (system:serviceaccount:velero:velero). Changing it silently breaks auth.
+    namespace: velero
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # Velero's CRDs are large enough to exceed the 256KB annotation that
+      # client-side apply uses for last-applied-configuration.
+      - ServerSideApply=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 20s
+        factor: 2
+        maxDuration: 3m

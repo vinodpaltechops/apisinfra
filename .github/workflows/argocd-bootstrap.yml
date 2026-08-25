@@ -1,0 +1,204 @@
+# ARGOCD BOOTSTRAP — installs Argo CD and its root Application into ONE cluster.
+#
+# Run it once per cluster (dev, then dr). Idempotent, so re-running it upgrades
+# Argo CD in place; re-run it whenever you change
+# k8s/gitops/bootstrap/argocd-values.yaml.
+#
+# After this, nothing else is ever applied by hand: the root Application pulls
+# every other component from k8s/gitops/apps/<cluster>/.
+#
+# Reaches the private cluster the same way as aks-platform-bootstrap — through
+# `az aks command invoke`, which runs the command from a pod INSIDE the cluster.
+# That is an ARM call, so the runner needs no network route into the spoke.
+#
+# The chart is pulled ON THE RUNNER and uploaded as a .tgz, rather than having
+# the in-cluster pod fetch it from argoproj.github.io. A pod in a private
+# cluster is the least reliable place to do an outbound chart download.
+name: argocd-bootstrap
+
+on:
+  workflow_dispatch:
+    inputs:
+      cluster:
+        description: "Which cluster to bootstrap"
+        type: choice
+        options: [dev, dr]
+        default: dev
+      uninstall:
+        description: "Remove Argo CD instead of installing it"
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ARGOCD_CHART_VERSION: "7.7.11" # Argo CD 2.13.x
+  ARGOCD_NAMESPACE: argocd
+  # The velero layer holds the identity client id these clusters need.
+  VELERO_LAYER: infra/platform/velero
+
+jobs:
+  bootstrap:
+    name: Argo CD → ${{ inputs.cluster }}
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      TF_VERSION: "1.9.8"
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ARM_SKIP_PROVIDER_REGISTRATION: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      # Resolve the target cluster from the single `cluster` input, so the two
+      # names can never be mixed (installing the dev root app into the DR
+      # cluster would have both clusters syncing the same overlay).
+      - name: Resolve target cluster
+        run: |
+          case "${{ inputs.cluster }}" in
+            dev)
+              echo "AKS_RESOURCE_GROUP=${{ vars.AKS_RESOURCE_GROUP || 'rg-spoke-dev-vinorg-001' }}" >> "$GITHUB_ENV"
+              echo "AKS_CLUSTER_NAME=${{ vars.AKS_CLUSTER_NAME || 'aks-dev-lab-001' }}"             >> "$GITHUB_ENV"
+              echo "ROOT_APP=k8s/gitops/bootstrap/root-app-dev.yaml"                                >> "$GITHUB_ENV"
+              echo "VELERO_VALUES=k8s/gitops/platform/velero/values-dev.yaml"                       >> "$GITHUB_ENV"
+              ;;
+            dr)
+              echo "AKS_RESOURCE_GROUP=${{ vars.AKS_DR_RESOURCE_GROUP || 'rg-spoke-dr-vinorg-001' }}" >> "$GITHUB_ENV"
+              echo "AKS_CLUSTER_NAME=${{ vars.AKS_DR_CLUSTER_NAME || 'aks-dr-lab-001' }}"             >> "$GITHUB_ENV"
+              echo "ROOT_APP=k8s/gitops/bootstrap/root-app-dr.yaml"                                   >> "$GITHUB_ENV"
+              echo "VELERO_VALUES=k8s/gitops/platform/velero/values-dr.yaml"                          >> "$GITHUB_ENV"
+              ;;
+          esac
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # ── Guard: refuse to bootstrap with an unconfigured Velero identity ──────
+      # Argo CD would happily sync a Velero whose ServiceAccount carries the
+      # literal string REPLACE_WITH_... It comes up healthy and every backup
+      # fails at "failed to get credentials" — a backup system that looks
+      # installed and protects nothing. Catch it here, with the value to paste.
+      - uses: hashicorp/setup-terraform@v3
+        if: ${{ !inputs.uninstall }}
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Verify Velero identity is wired up
+        if: ${{ !inputs.uninstall }}
+        run: |
+          set -euo pipefail
+
+          terraform -chdir="$VELERO_LAYER" init -input=false >/dev/null
+          expected="$(terraform -chdir="$VELERO_LAYER" output -raw identity_client_id)"
+
+          actual="$(grep -oP 'azure\.workload\.identity/client-id:\s*"\K[^"]+' "$VELERO_VALUES" || true)"
+
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::$VELERO_VALUES has client-id '$actual' but the velero layer says '$expected'."
+            echo ""
+            echo "Set it in Git and commit — this is GitOps, so the file is the source of truth:"
+            echo "  sed -i 's|azure.workload.identity/client-id: \".*\"|azure.workload.identity/client-id: \"$expected\"|' $VELERO_VALUES"
+            exit 1
+          fi
+          echo "Velero identity matches the velero layer: $expected"
+
+      - name: Uninstall
+        if: ${{ inputs.uninstall }}
+        run: |
+          # Delete the root Application FIRST. Its resources-finalizer cascades
+          # to every child, so removing Argo CD before it would orphan every
+          # component — still running, with nothing managing them.
+          az aks command invoke \
+            --resource-group "$AKS_RESOURCE_GROUP" \
+            --name "$AKS_CLUSTER_NAME" \
+            --command "kubectl -n $ARGOCD_NAMESPACE delete application --all --wait=true --timeout=5m || true"
+
+          az aks command invoke \
+            --resource-group "$AKS_RESOURCE_GROUP" \
+            --name "$AKS_CLUSTER_NAME" \
+            --command "helm uninstall argocd --namespace $ARGOCD_NAMESPACE"
+
+      - uses: azure/setup-helm@v4
+        if: ${{ !inputs.uninstall }}
+
+      # Runner-side download; the cluster never talks to argoproj.github.io.
+      - name: Fetch chart
+        if: ${{ !inputs.uninstall }}
+        run: |
+          helm repo add argo https://argoproj.github.io/argo-helm
+          helm repo update
+          helm pull argo/argo-cd --version "$ARGOCD_CHART_VERSION" --destination .
+
+          # Upload from the workspace root so both land in the run-command pod's
+          # working directory under predictable basenames.
+          cp k8s/gitops/bootstrap/argocd-values.yaml ./argocd-values.yaml
+          cp "$ROOT_APP" ./root-app.yaml
+          ls -l argo-cd-*.tgz argocd-values.yaml root-app.yaml
+
+      # NOTE on quoting: everything inside --command runs in a shell in the
+      # run-command pod, so a bare newline would terminate the command. Each
+      # invocation is a single line, chained with &&.
+      - name: Install / upgrade Argo CD
+        if: ${{ !inputs.uninstall }}
+        run: |
+          chart="argo-cd-${ARGOCD_CHART_VERSION}.tgz"
+
+          az aks command invoke \
+            --resource-group "$AKS_RESOURCE_GROUP" \
+            --name "$AKS_CLUSTER_NAME" \
+            --command "helm upgrade --install argocd ./${chart} --namespace $ARGOCD_NAMESPACE --create-namespace --values argocd-values.yaml --wait --timeout 10m" \
+            --file "$chart" \
+            --file argocd-values.yaml
+
+      # The ONLY kubectl apply in the whole GitOps flow. Everything after this
+      # point is Argo CD pulling from the repo.
+      - name: Apply root Application
+        if: ${{ !inputs.uninstall }}
+        run: |
+          az aks command invoke \
+            --resource-group "$AKS_RESOURCE_GROUP" \
+            --name "$AKS_CLUSTER_NAME" \
+            --command "kubectl apply -f root-app.yaml" \
+            --file root-app.yaml
+
+      - name: Report state
+        if: ${{ !inputs.uninstall }}
+        run: |
+          # Applications are created by the root app and reconciled
+          # asynchronously, so a moment after apply the list is legitimately
+          # short. This is a snapshot, not a gate.
+          az aks command invoke \
+            --resource-group "$AKS_RESOURCE_GROUP" \
+            --name "$AKS_CLUSTER_NAME" \
+            --command "kubectl -n $ARGOCD_NAMESPACE get applications -o wide; kubectl -n $ARGOCD_NAMESPACE get pods"
+
+      - name: How to reach the UI
+        if: ${{ !inputs.uninstall }}
+        run: |
+          cat <<'EOF'
+          Argo CD is ClusterIP only — the cluster is private and its ingress is
+          internal. Reach it from the mgmt VM:
+
+            ssh azureadmin@<mgmt_vm_public_ip>
+            az login --identity
+            az aks get-credentials -g $AKS_RESOURCE_GROUP -n $AKS_CLUSTER_NAME --overwrite-existing
+            kubectl -n argocd port-forward svc/argocd-server 8080:80
+
+          Then from your laptop, tunnelling through the same VM:
+            ssh -L 8080:localhost:8080 azureadmin@<mgmt_vm_public_ip>
+            open http://localhost:8080
+
+          Initial admin password:
+            kubectl -n argocd get secret argocd-initial-admin-secret \
+              -o jsonpath='{.data.password}' | base64 -d
+
+          Change it, then delete that secret — it is a bootstrap artefact and
+          Argo CD does not need it afterwards.
+          EOF

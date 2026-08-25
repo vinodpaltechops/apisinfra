@@ -214,6 +214,47 @@ resource "azurerm_web_application_firewall_policy" "appgw" {
     file_upload_limit_in_mb     = 100
   }
 
+  # ── DR: lock the origin to Front Door ───────────────────────────────────────
+  # Generated ONLY when frontdoor_id is set, so with the default null this
+  # policy is identical to the pre-DR one.
+  #
+  # Putting Front Door in front of this gateway does not, by itself, stop anyone
+  # reaching the gateway's own public IP directly — and a direct hit bypasses
+  # Front Door's WAF, its rate limiting and its routing. Restricting the NSG to
+  # the AzureFrontDoor.Backend service tag (see allowed_source_prefixes in the
+  # DR/primary appgw layers) narrows that to "any Front Door profile in Azure,
+  # including someone else's", which is not a boundary.
+  #
+  # The header is what closes it. Front Door stamps every origin request with
+  # X-Azure-FDID carrying the profile's unique id; nothing else can forge it
+  # through Front Door, and a direct caller does not have it. Blocking on
+  # absence-or-mismatch is the documented origin lock.
+  #
+  # Priority 1: custom rules are evaluated before the managed OWASP set, so this
+  # rejects bypass traffic before spending any WAF budget on inspecting it.
+  dynamic "custom_rules" {
+    for_each = var.frontdoor_id == null ? [] : [var.frontdoor_id]
+    content {
+      name      = "BlockNonFrontDoorTraffic"
+      priority  = 1
+      rule_type = "MatchRule"
+      action    = "Block"
+
+      match_conditions {
+        match_variables {
+          variable_name = "RequestHeaders"
+          selector      = "X-Azure-FDID"
+        }
+        operator = "Equal"
+        # Negated: block when the header does NOT equal our profile id. That
+        # single flag also covers the header being absent entirely, which is
+        # what a direct-to-IP request looks like.
+        negation_condition = true
+        match_values       = [custom_rules.value]
+      }
+    }
+  }
+
   managed_rules {
     managed_rule_set {
       type    = "OWASP"

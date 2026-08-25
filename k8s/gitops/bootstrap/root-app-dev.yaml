@@ -1,0 +1,56 @@
+# ROOT APPLICATION (app-of-apps) — PRIMARY cluster, aks-dev-lab-001.
+#
+# The only object applied by hand. Everything else in the cluster is a child
+# Application under k8s/gitops/apps/dev/, which this one discovers and syncs.
+# Adding a component to the cluster therefore means adding a file to that
+# directory — never another kubectl apply.
+#
+# Apply once with:
+#   az aks command invoke -g <rg> -n <cluster> \
+#     --command "kubectl apply -f root-app-dev.yaml" --file root-app-dev.yaml
+#
+# The argocd-bootstrap workflow does exactly that.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root-dev
+  namespace: argocd
+  # Without this finalizer, deleting the root Application orphans every child —
+  # they keep running with nothing managing them, which is the worst of both
+  # states. With it, deletion cascades properly.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/vinodpaltechops/apisinfra.git
+    targetRevision: main
+    # PER-CLUSTER PATH. This is the whole multi-cluster mechanism: both clusters
+    # run an identical Argo CD against an identical repo, and differ only in
+    # which directory their root Application reads. No cluster secrets, no
+    # cross-cluster API access, no hub.
+    path: k8s/gitops/apps/dev
+    directory:
+      recurse: true
+
+  destination:
+    # Always in-cluster. Each Argo CD manages only the cluster it runs in.
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      # Delete children removed from Git. Without this a decommissioned
+      # component lingers forever and Git stops describing the cluster.
+      prune: true
+      # Revert manual kubectl changes. This is what makes the DR cluster's state
+      # a function of the repo alone — which is the property a failover relies on.
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # Server-side apply: the CRDs installed further down this tree (Velero's
+      # in particular) exceed the 256KB annotation limit that client-side apply
+      # uses to store last-applied-configuration, and fail with
+      # "metadata.annotations: Too long".
+      - ServerSideApply=true

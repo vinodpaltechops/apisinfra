@@ -77,6 +77,15 @@ module "appgw" {
   waf_mode                = var.waf_mode
   allowed_source_prefixes = var.allowed_source_prefixes
 
+  # ── DR: origin lock ─────────────────────────────────────────────────────────
+  # null by default, which generates no WAF custom rule and leaves this gateway
+  # exactly as it is today — the public entry point, reachable on its own IP.
+  #
+  # Set it (from the frontdoor layer's frontdoor_id output) once Front Door
+  # fronts this gateway, so the WAF drops anything arriving without the matching
+  # X-Azure-FDID header. Setting it BEFORE Front Door exists blocks all traffic.
+  frontdoor_id = var.frontdoor_id
+
   # ── TLS ─────────────────────────────────────────────────────────────────────
   # enable_https = false → :80 serves the app. A complete configuration, not a
   #                        half-built one; the gateway needs no certificate.

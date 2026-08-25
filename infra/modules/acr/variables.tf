@@ -33,6 +33,28 @@ variable "public_network_access_enabled" {
   default     = true
 }
 
+variable "geo_replication_locations" {
+  description = <<-EOT
+    Extra regions to replicate the registry into, e.g. ["indiasouthcentral"]. Must
+    NOT include the registry's own location — Azure rejects that as a duplicate.
+
+    Empty (default) generates no georeplications block at all, leaving Basic
+    registries exactly as they were.
+
+    PREMIUM ONLY. Setting this on Basic or Standard fails the apply with
+    "Geo-replication is not supported for the <sku> SKU", which is the intended
+    behaviour: silently ignoring it would leave you believing the DR region has
+    a local registry when it does not.
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.geo_replication_locations) == 0 || var.sku == "Premium"
+    error_message = "geo_replication_locations requires sku = \"Premium\". Set both together, or leave the list empty."
+  }
+}
+
 variable "kubelet_identity_object_id" {
   description = "AKS kubelet managed identity object ID — granted AcrPull so nodes pull without an imagePullSecret."
   type        = string
