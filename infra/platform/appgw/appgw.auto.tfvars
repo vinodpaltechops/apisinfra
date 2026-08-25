@@ -15,7 +15,7 @@ waf_mode = "Prevention"
 # false = HTTP only. Flip to true once the certificate is in Key Vault and the
 # two settings below are filled in. Toggling does not change the public IP, so
 # the GoDaddy A record keeps working either way.
-enable_https = false
+enable_https = true
 
 # Only read when enable_https = true.
 #   true  — :80 permanently redirects to :443 (right answer for a public site)
@@ -56,8 +56,8 @@ http_redirect_to_https = false
 # User on key_vault_id — do not create that role assignment by hand as well, or
 # the apply fails with RoleAssignmentExists.
 #
-ssl_certificate_key_vault_secret_id = "https://kv-dev-lab-d5f9ug.vault.azure.net/secrets/app-tls"
-key_vault_id                        = "/subscriptions/9a80f875-0d94-48c9-9502-c7814477ffad/resourceGroups/rg-spoke-dev-vinorg-001/providers/Microsoft.KeyVault/vaults/kv-dev-lab-d5f9ug"
+ssl_certificate_key_vault_secret_id = "https://kv-dev-lab-o6xycn.vault.azure.net/secrets/app-tls"
+key_vault_id                        = "/subscriptions/9a80f875-0d94-48c9-9502-c7814477ffad/resourceGroups/rg-spoke-dev-vinorg-001/providers/Microsoft.KeyVault/vaults/kv-dev-lab-o6xycn"
 
 # ["Internet"] = a genuinely public site. While testing you can narrow this to
 # your own ISP range, e.g. ["163.223.165.0/24"], and widen it once it works.

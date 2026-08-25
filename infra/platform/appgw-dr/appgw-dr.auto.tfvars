@@ -63,11 +63,11 @@ allowed_source_prefixes = ["Internet"]
 # up expired in exactly the region you fail over to.
 #
 # Unversioned secret URL, so a rotation is picked up without a Terraform change.
-enable_https           = false
+enable_https           = true
 http_redirect_to_https = false
 
-ssl_certificate_key_vault_secret_id = "https://kv-dev-lab-d5f9ug.vault.azure.net/secrets/app-tls"
-key_vault_id                        = "/subscriptions/9a80f875-0d94-48c9-9502-c7814477ffad/resourceGroups/rg-spoke-dev-vinorg-001/providers/Microsoft.KeyVault/vaults/kv-dev-lab-d5f9ug"
+ssl_certificate_key_vault_secret_id = "https://kv-dev-lab-o6xycn.vault.azure.net/secrets/app-tls"
+key_vault_id                        = "/subscriptions/9a80f875-0d94-48c9-9502-c7814477ffad/resourceGroups/rg-spoke-dev-vinorg-001/providers/Microsoft.KeyVault/vaults/kv-dev-lab-o6xycn"
 
 # Dedicated gateway subnet inside the DR spoke. 10.5.1-4.0/24 are the spoke's
 # own snet-* ranges, so the gateway takes .7 to mirror the hub's 10.0.7.0/24.
