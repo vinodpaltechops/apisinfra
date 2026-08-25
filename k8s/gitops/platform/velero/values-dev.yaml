@@ -46,7 +46,7 @@ serviceAccount:
       # This is the CLIENT id, not the principal/object id. Using the principal
       # id fails at token exchange with "AADSTS700016: application not found",
       # which reads like a missing app registration rather than a wrong GUID.
-      azure.workload.identity/client-id: "REPLACE_WITH_VELERO_IDENTITY_CLIENT_ID"
+      azure.workload.identity/client-id: "92e1d75d-83e1-4836-a838-dd0b5faa0862"
 
 # Required for the workload identity webhook to mutate the pod. Without this
 # label nothing is injected, and Velero falls back to looking for a credentials
