@@ -15,7 +15,7 @@ waf_mode = "Prevention"
 # false = HTTP only. Flip to true once the certificate is in Key Vault and the
 # two settings below are filled in. Toggling does not change the public IP, so
 # the GoDaddy A record keeps working either way.
-enable_https = true
+enable_https = false
 
 # Only read when enable_https = true.
 #   true  — :80 permanently redirects to :443 (right answer for a public site)

@@ -63,7 +63,7 @@ allowed_source_prefixes = ["Internet"]
 # up expired in exactly the region you fail over to.
 #
 # Unversioned secret URL, so a rotation is picked up without a Terraform change.
-enable_https           = true
+enable_https           = false
 http_redirect_to_https = false
 
 ssl_certificate_key_vault_secret_id = "https://kv-dev-lab-o6xycn.vault.azure.net/secrets/app-tls"
