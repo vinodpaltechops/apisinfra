@@ -157,8 +157,70 @@ jobs:
             --file "$chart" \
             --file argocd-values.yaml
 
+      # ── Repository credentials — REQUIRED because this repo is PRIVATE ────────
+      # Argo CD clones over HTTPS with no credentials by default. Against a
+      # private repo every Application then fails with
+      #   "authentication required" / "repository not accessible"
+      # and the root app never produces children — which looks like a broken
+      # app-of-apps rather than a missing credential.
+      #
+      # Argo CD discovers repo credentials from Secrets in its own namespace
+      # carrying the label argocd.argoproj.io/secret-type: repository. The
+      # secret is built HERE from a GitHub Actions secret rather than committed,
+      # for the obvious reason — and uploaded as a --file so the token is never
+      # part of the command string.
+      #
+      # Create ARGOCD_REPO_PAT as a repository secret: a fine-grained PAT with
+      # read-only "Contents" on this repo and nothing else. Argo CD only ever
+      # reads; a token that can write is a token that can rewrite your desired
+      # state from inside the cluster.
+      - name: Configure repository credentials
+        if: ${{ !inputs.uninstall }}
+        env:
+          REPO_PAT: ${{ secrets.ARGOCD_REPO_PAT }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${REPO_PAT:-}" ]; then
+            echo "::error::secret ARGOCD_REPO_PAT is not set."
+            echo "This repository is PRIVATE, so Argo CD cannot clone it anonymously."
+            echo "Create a fine-grained PAT (read-only Contents on this repo) and add it"
+            echo "as the repository secret ARGOCD_REPO_PAT, then re-run."
+            exit 1
+          fi
+
+          # username is ignored by GitHub when a PAT is supplied as the password,
+          # but the field must be present or Argo CD treats the secret as
+          # anonymous and silently keeps failing.
+          cat > repo-secret.yaml <<YAML
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: repo-apisinfra
+            namespace: ${ARGOCD_NAMESPACE}
+            labels:
+              argocd.argoproj.io/secret-type: repository
+          stringData:
+            type: git
+            url: https://github.com/${GITHUB_REPOSITORY}.git
+            username: git
+            password: ${REPO_PAT}
+          YAML
+
+          az aks command invoke \
+            --resource-group "$AKS_RESOURCE_GROUP" \
+            --name "$AKS_CLUSTER_NAME" \
+            --command "kubectl apply -f repo-secret.yaml" \
+            --file repo-secret.yaml
+
+          rm -f repo-secret.yaml
+
       # The ONLY kubectl apply in the whole GitOps flow. Everything after this
       # point is Argo CD pulling from the repo.
+      #
+      # Applied AFTER the credential above: the root app starts reconciling the
+      # moment it exists, and without credentials in place its first sync fails
+      # and it sits in a backoff you then have to wait out.
       - name: Apply root Application
         if: ${{ !inputs.uninstall }}
         run: |

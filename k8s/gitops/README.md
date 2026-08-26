@@ -44,8 +44,48 @@ leave the two regions genuinely out of step until you look.
 
 ## Bootstrapping a cluster
 
+### Prerequisite: repository credentials
+
+**This repo is PRIVATE**, so Argo CD cannot clone it anonymously. Without a
+credential every Application fails with `authentication required` and the root
+app produces no children — which reads like a broken app-of-apps rather than a
+missing token.
+
+Create a **fine-grained PAT** with read-only **Contents** on this repo and
+nothing else, and add it as the repository secret `ARGOCD_REPO_PAT`:
+
+```
+GitHub → Settings → Developer settings → Personal access tokens
+         → Fine-grained tokens → Generate new token
+         Repository access: only vinodpaltechops/apisinfra
+         Permissions: Contents = Read-only
+
+Repo → Settings → Secrets and variables → Actions → New repository secret
+         Name: ARGOCD_REPO_PAT
+```
+
+Read-only is the point: Argo CD only ever *reads* the repo. A token that can
+write is a token that can rewrite your desired state from inside the cluster.
+
+`argocd-bootstrap` builds the Argo CD repository Secret from it at run time and
+uploads it as a file, so the token is never committed and never appears in a
+command line. The workflow fails fast with instructions if the secret is unset.
+
+### Prerequisite: images must exist
+
+Argo CD syncs `content-hub` from the overlays, which pin an immutable image tag.
+If ACR has no image at that tag the app lands in `ImagePullBackOff` and stays
+there. Run `app-deploy` first — note that a rebuilt ACR is EMPTY even though the
+pinned tag is still in Git, because the images died with the old registry.
+
 ```bash
-# once per cluster — installs Argo CD, applies the root Application
+az acr repository list -n acrdevvinorg001 -o tsv    # must not be empty
+```
+
+### Run it
+
+```bash
+# once per cluster — installs Argo CD, the repo credential, and the root app
 gh workflow run argocd-bootstrap.yml -f cluster=dev
 gh workflow run argocd-bootstrap.yml -f cluster=dr
 ```
