@@ -4,7 +4,7 @@ kind: Kustomization
 namespace: content-hub
 
 resources:
-  - ../../base
+- ../../base
 
 # ── Image tags: identical to the dev overlay, and that is the point ───────────
 # Both overlays pin the SAME registry and the SAME tag, because both clusters
@@ -18,22 +18,22 @@ resources:
 # (Premium SKU); the login server name does not change when you enable it, so
 # nothing here needs editing.
 images:
-  - name: content-api
-    newName: acrdevvinorg001.azurecr.io/content-hub/content-api
-    newTag: latest
-  - name: backend
-    newName: acrdevvinorg001.azurecr.io/content-hub/backend
-    newTag: latest
-  - name: frontend
-    newName: acrdevvinorg001.azurecr.io/content-hub/frontend
-    newTag: latest
+- name: backend
+  newName: acrdevvinorg001.azurecr.io/content-hub/backend
+  newTag: 70ad3f6dbaaf1c53ee50aed4a1dabb8ed18a124c
+- name: content-api
+  newName: acrdevvinorg001.azurecr.io/content-hub/content-api
+  newTag: 70ad3f6dbaaf1c53ee50aed4a1dabb8ed18a124c
+- name: frontend
+  newName: acrdevvinorg001.azurecr.io/content-hub/frontend
+  newTag: 70ad3f6dbaaf1c53ee50aed4a1dabb8ed18a124c
 
-patches:
   # Same reasoning as the dev overlay: IfNotPresent would let a stale
   # node-cached layer win if a tag were ever reused.
-  - target:
-      kind: Deployment
-    patch: |
-      - op: replace
-        path: /spec/template/spec/containers/0/imagePullPolicy
-        value: Always
+patches:
+- patch: |
+    - op: replace
+      path: /spec/template/spec/containers/0/imagePullPolicy
+      value: Always
+  target:
+    kind: Deployment
