@@ -20,13 +20,13 @@ resources:
 images:
 - name: backend
   newName: acrdevvinorg001.azurecr.io/content-hub/backend
-  newTag: 645d536a550feee459d33cf819a2240824a6264c
+  newTag: a6e2ad887f679e9e4c2302df5a6ff8b8a3047f40
 - name: content-api
   newName: acrdevvinorg001.azurecr.io/content-hub/content-api
-  newTag: 645d536a550feee459d33cf819a2240824a6264c
+  newTag: a6e2ad887f679e9e4c2302df5a6ff8b8a3047f40
 - name: frontend
   newName: acrdevvinorg001.azurecr.io/content-hub/frontend
-  newTag: 645d536a550feee459d33cf819a2240824a6264c
+  newTag: a6e2ad887f679e9e4c2302df5a6ff8b8a3047f40
 
   # Same reasoning as the dev overlay: IfNotPresent would let a stale
   # node-cached layer win if a tag were ever reused.
