@@ -43,8 +43,9 @@ jobs:
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      # RPs are registered out-of-band once (see setup script); skip per-run
-      # registration to dodge the free-tier "context canceled" RP races.
+      # RPs are registered once per subscription by infra/platform/bootstrap
+      # (the resource_providers list there); skip per-run registration to dodge
+      # the free-tier "context canceled" RP races.
       ARM_SKIP_PROVIDER_REGISTRATION: "true"
       # --- tfvars ---
       # Non-secret values live in committed *.auto.tfvars (auto-loaded).
