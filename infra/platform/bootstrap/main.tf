@@ -12,12 +12,12 @@ terraform {
       version = "~> 3.110"
     }
   }
-  backend "azurerm" {
-    resource_group_name  = "rg-tfstate-vinorg-001"
-    storage_account_name = "stotfstatevinorg001"
-    container_name       = "bootstrap"
-    key                  = "bootstrap.tfstate"
-  }
+  # backend "azurerm" {
+  #   resource_group_name  = "rg-tfstate-vinorg-001"
+  #   storage_account_name = "stotfstatevinorg001"
+  #   container_name       = "bootstrap"
+  #   key                  = "bootstrap.tfstate"
+  # }
   # Bootstrap state is LOCAL — this is intentional.
   # All other layers point their backend here.
 }
