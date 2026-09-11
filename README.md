@@ -48,16 +48,27 @@ export ARM_SUBSCRIPTION_ID="<management-subscription-id>"
 
 ## Running each layer
 
-```bash
-cd bootstrap/
-terraform init
-terraform plan -var="management_subscription_id=$ARM_SUBSCRIPTION_ID"
-terraform apply -var="management_subscription_id=$ARM_SUBSCRIPTION_ID"
+The state storage account's name and resource group live in ONE file,
+[infra/backend.json](infra/backend.json). Bootstrap creates the account from it,
+and every other layer reads it — its backend at `init`, its
+`terraform_remote_state` blocks via `jsondecode`. Storage account names are
+globally unique across Azure, so if the name is taken (e.g. by an old
+subscription), change it there and nowhere else.
 
-# After bootstrap, grab the storage account name from output:
-terraform output storage_account_name
-# Then update backend "storage_account_name" in each subsequent layer's main.tf
+```bash
+# Bootstrap — local state, plain init. Also registers every resource provider
+# namespace the stack needs, so a fresh subscription needs no manual setup.
+terraform -chdir=infra/platform/bootstrap init
+terraform -chdir=infra/platform/bootstrap apply
+
+# Every other layer — the backend needs the shared file at init
+terraform -chdir=infra/platform/connectivity init -backend-config=../../backend.json
+terraform -chdir=infra/platform/connectivity plan
 ```
+
+Forgetting `-backend-config` makes `init` prompt for `storage_account_name`
+(or fail, under `-input=false`). After changing backend.json, re-run init with
+`-reconfigure` in any layer you have already initialised locally.
 
 ## Application workload
 

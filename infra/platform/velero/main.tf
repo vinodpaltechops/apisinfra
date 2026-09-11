@@ -31,10 +31,10 @@ terraform {
     }
   }
   backend "azurerm" {
-    resource_group_name  = "rg-tfstate-vinorg-001"
-    storage_account_name = "stotfstatevinorg001"
-    container_name       = "velero"
-    key                  = "velero.tfstate"
+    # resource_group_name + storage_account_name come from infra/backend.json:
+    #   terraform init -backend-config=../../backend.json
+    container_name = "velero"
+    key            = "velero.tfstate"
   }
 }
 
@@ -88,14 +88,18 @@ locals {
 
 data "azurerm_client_config" "current" {}
 
+# State storage account + resource group. Same file `terraform init` reads via
+# -backend-config, so the name lives in exactly one place.
+locals {
+  tfstate_backend = jsondecode(file("${path.module}/../../backend.json"))
+}
+
 data "terraform_remote_state" "dev" {
   backend = "azurerm"
-  config = {
-    resource_group_name  = "rg-tfstate-vinorg-001"
-    storage_account_name = "stotfstatevinorg001"
-    container_name       = "landing-zones-dev"
-    key                  = "landing-zones-dev.tfstate"
-  }
+  config = merge(local.tfstate_backend, {
+    container_name = "landing-zones-dev"
+    key            = "landing-zones-dev.tfstate"
+  })
 }
 
 # count, not a plain data block: with enable_dr = false the DR state file does
@@ -105,12 +109,10 @@ data "terraform_remote_state" "dr" {
   count = var.enable_dr ? 1 : 0
 
   backend = "azurerm"
-  config = {
-    resource_group_name  = "rg-tfstate-vinorg-001"
-    storage_account_name = "stotfstatevinorg001"
-    container_name       = "landing-zones-dr"
-    key                  = "landing-zones-dr.tfstate"
-  }
+  config = merge(local.tfstate_backend, {
+    container_name = "landing-zones-dr"
+    key            = "landing-zones-dr.tfstate"
+  })
 }
 
 # ── Resource group ────────────────────────────────────────────────────────────

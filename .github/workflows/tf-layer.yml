@@ -61,8 +61,11 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
+      # Backend blocks carry only container + key; the state account and its
+      # resource group come from infra/backend.json (relative to the layer dir —
+      # every layer sits two levels below infra/).
       - name: Init
-        run: terraform init -input=false
+        run: terraform init -input=false -backend-config=../../backend.json
 
       - name: Format check
         if: ${{ !inputs.destroy }}

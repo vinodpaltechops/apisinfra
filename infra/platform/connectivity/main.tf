@@ -8,10 +8,10 @@ terraform {
   }
 
   backend "azurerm" {
-    resource_group_name  = "rg-tfstate-vinorg-001"
-    storage_account_name = "stotfstatevinorg001"
-    container_name       = "connectivity"
-    key                  = "connectivity.tfstate"
+    # resource_group_name + storage_account_name come from infra/backend.json:
+    #   terraform init -backend-config=../../backend.json
+    container_name = "connectivity"
+    key            = "connectivity.tfstate"
   }
 }
 

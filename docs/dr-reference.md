@@ -207,7 +207,7 @@ Secrets User`, so the two assignments never collide.
 
 ### 2.7 Terraform layers and state
 
-One state file per layer, all in `stotfstatevinorg001` /
+One state file per layer, all in `stotfstatevinorg002` /
 `rg-tfstate-vinorg-001`. The DR add-on introduces four new containers:
 
 | Layer | Container | Key | Purpose |
@@ -621,7 +621,7 @@ that has silently stopped. Argo CD un-pauses it within the reconcile interval.
 | CRDs, ClusterRoles, StorageClasses | Only in `daily-full` | Velero / Git |
 | Container images | **No** | ACR |
 | Key Vault certificates | **No** | Key Vault (single region — a gap) |
-| Terraform state | **No** | `stotfstatevinorg001` |
+| Terraform state | **No** | `stotfstatevinorg002` |
 | Azure resources (VNets, AKS, gateways) | **No** | Terraform |
 | Argo CD's own state | **No** (excluded) | Git |
 

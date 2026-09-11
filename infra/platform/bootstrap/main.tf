@@ -18,13 +18,20 @@ terraform {
     }
   }
   # backend "azurerm" {
-  #   resource_group_name  = "rg-tfstate-vinorg-001"
-  #   storage_account_name = "stotfstatevinorg001"
-  #   container_name       = "bootstrap"
-  #   key                  = "bootstrap.tfstate"
+  #   container_name = "bootstrap"
+  #   key            = "bootstrap.tfstate"
   # }
   # Bootstrap state is LOCAL — this is intentional.
   # All other layers point their backend here.
+}
+
+# The state account's name and resource group — the ONE place they are defined.
+# Every other layer reads the same file: its backend via
+# `terraform init -backend-config=../../backend.json`, its terraform_remote_state
+# blocks via jsondecode. Storage account names are globally unique across all of
+# Azure, so if the name is ever taken, change it there and nowhere else.
+locals {
+  tfstate_backend = jsondecode(file("${path.module}/../../backend.json"))
 }
 
 provider "azurerm" {
@@ -35,7 +42,7 @@ provider "azurerm" {
 }
 
 resource "azurerm_resource_group" "tfstate" {
-  name     = "rg-tfstate-${var.org_name}-001"
+  name     = local.tfstate_backend.resource_group_name
   location = var.location
 
   tags = {
@@ -119,10 +126,8 @@ resource "azurerm_storage_account" "tfstate" {
   # No attribute reference ties these together, so the ordering must be explicit.
   depends_on = [azurerm_resource_provider_registration.this]
 
-  # Fixed, deterministic name — referenced statically by every layer's backend.
-  # If you ever change it, update the storage_account_name in all layer
-  # backends + terraform_remote_state blocks to match.
-  name                            = "stotfstatevinorg001"
+  # From infra/backend.json — see the locals block at the top.
+  name                            = local.tfstate_backend.storage_account_name
   resource_group_name             = azurerm_resource_group.tfstate.name
   location                        = azurerm_resource_group.tfstate.location
   account_tier                    = "Standard"

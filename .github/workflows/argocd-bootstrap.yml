@@ -95,7 +95,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          terraform -chdir="$VELERO_LAYER" init -input=false >/dev/null
+          terraform -chdir="$VELERO_LAYER" init -input=false -backend-config=../../backend.json >/dev/null
           expected="$(terraform -chdir="$VELERO_LAYER" output -raw identity_client_id)"
 
           actual="$(grep -oP 'azure\.workload\.identity/client-id:\s*"\K[^"]+' "$VELERO_VALUES" || true)"

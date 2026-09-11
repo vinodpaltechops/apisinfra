@@ -34,10 +34,10 @@ terraform {
     }
   }
   backend "azurerm" {
-    resource_group_name  = "rg-tfstate-vinorg-001"
-    storage_account_name = "stotfstatevinorg001"
-    container_name       = "appgw-dr"
-    key                  = "appgw-dr.tfstate"
+    # resource_group_name + storage_account_name come from infra/backend.json:
+    #   terraform init -backend-config=../../backend.json
+    container_name = "appgw-dr"
+    key            = "appgw-dr.tfstate"
   }
 }
 
@@ -60,18 +60,22 @@ locals {
   })
 }
 
+# State storage account + resource group. Same file `terraform init` reads via
+# -backend-config, so the name lives in exactly one place.
+locals {
+  tfstate_backend = jsondecode(file("${path.module}/../../backend.json"))
+}
+
 # Unlike the primary appgw layer — which deliberately avoids reading dev's state
 # and pins the ingress VIP as a constant — this layer DOES read the DR landing
 # zone. It needs the spoke's resource group, VNet name and region, none of which
 # are constants, and all of which come from one place there.
 data "terraform_remote_state" "dr" {
   backend = "azurerm"
-  config = {
-    resource_group_name  = "rg-tfstate-vinorg-001"
-    storage_account_name = "stotfstatevinorg001"
-    container_name       = "landing-zones-dr"
-    key                  = "landing-zones-dr.tfstate"
-  }
+  config = merge(local.tfstate_backend, {
+    container_name = "landing-zones-dr"
+    key            = "landing-zones-dr.tfstate"
+  })
 }
 
 module "appgw" {

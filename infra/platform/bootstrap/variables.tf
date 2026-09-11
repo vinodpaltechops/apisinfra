@@ -1,9 +1,5 @@
-variable "org_name" {
-  description = "Short lowercase org name used in all resource names. E.g. 'contoso'."
-  type        = string
-  default     = "vinorg"
-}
-
+# No org_name: the only names this layer creates (state account + resource
+# group) come from infra/backend.json, shared with every other layer.
 variable "location" {
   description = "Primary Azure region for all resources."
   type        = string

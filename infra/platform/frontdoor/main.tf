@@ -30,10 +30,10 @@ terraform {
     }
   }
   backend "azurerm" {
-    resource_group_name  = "rg-tfstate-vinorg-001"
-    storage_account_name = "stotfstatevinorg001"
-    container_name       = "frontdoor"
-    key                  = "frontdoor.tfstate"
+    # resource_group_name + storage_account_name come from infra/backend.json:
+    #   terraform init -backend-config=../../backend.json
+    container_name = "frontdoor"
+    key            = "frontdoor.tfstate"
   }
 }
 
@@ -76,14 +76,18 @@ locals {
   )
 }
 
+# State storage account + resource group. Same file `terraform init` reads via
+# -backend-config, so the name lives in exactly one place.
+locals {
+  tfstate_backend = jsondecode(file("${path.module}/../../backend.json"))
+}
+
 data "terraform_remote_state" "appgw" {
   backend = "azurerm"
-  config = {
-    resource_group_name  = "rg-tfstate-vinorg-001"
-    storage_account_name = "stotfstatevinorg001"
-    container_name       = "appgw"
-    key                  = "appgw.tfstate"
-  }
+  config = merge(local.tfstate_backend, {
+    container_name = "appgw"
+    key            = "appgw.tfstate"
+  })
 }
 
 # count, so this layer can be applied before the DR region exists — an
@@ -92,12 +96,10 @@ data "terraform_remote_state" "appgw_dr" {
   count = var.enable_dr_origin ? 1 : 0
 
   backend = "azurerm"
-  config = {
-    resource_group_name  = "rg-tfstate-vinorg-001"
-    storage_account_name = "stotfstatevinorg001"
-    container_name       = "appgw-dr"
-    key                  = "appgw-dr.tfstate"
-  }
+  config = merge(local.tfstate_backend, {
+    container_name = "appgw-dr"
+    key            = "appgw-dr.tfstate"
+  })
 }
 
 # Front Door is global; this group only holds its metadata.

@@ -24,10 +24,10 @@ terraform {
     }
   }
   backend "azurerm" {
-    resource_group_name  = "rg-tfstate-vinorg-001"
-    storage_account_name = "stotfstatevinorg001"
-    container_name       = "appgw"
-    key                  = "appgw.tfstate"
+    # resource_group_name + storage_account_name come from infra/backend.json:
+    #   terraform init -backend-config=../../backend.json
+    container_name = "appgw"
+    key            = "appgw.tfstate"
   }
 }
 
@@ -51,15 +51,19 @@ locals {
   })
 }
 
+# State storage account + resource group. Same file `terraform init` reads via
+# -backend-config, so the name lives in exactly one place.
+locals {
+  tfstate_backend = jsondecode(file("${path.module}/../../backend.json"))
+}
+
 # Hub VNet details come from the connectivity layer (separate state).
 data "terraform_remote_state" "connectivity" {
   backend = "azurerm"
-  config = {
-    resource_group_name  = "rg-tfstate-vinorg-001"
-    storage_account_name = "stotfstatevinorg001"
-    container_name       = "connectivity"
-    key                  = "connectivity.tfstate"
-  }
+  config = merge(local.tfstate_backend, {
+    container_name = "connectivity"
+    key            = "connectivity.tfstate"
+  })
 }
 
 module "appgw" {
