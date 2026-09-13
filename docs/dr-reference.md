@@ -87,7 +87,7 @@ Conflating the two is the most common way a DR design turns out not to work.
                │ writes primary/          │ writes dr/, READS primary/
                └──────────┬───────────────┘
                           ▼
-              stovelerovinorg001   (southindia, RAGRS)
+              stovelerovinorg002   (southindia, RAGRS)
               container: velero
                 primary/  ← written by dev, read by both
                 dr/       ← written by dr
@@ -395,7 +395,7 @@ The Terraform layer creates **zero** Kubernetes objects.
 spokes on purpose: deleting a spoke's resource group is a normal, recoverable
 operation and it must not take the backups with it.
 
-**Storage account `stovelerovinorg001`:**
+**Storage account `stovelerovinorg002`:**
 
 | Setting | Value | Why |
 | --- | --- | --- |
@@ -525,7 +525,7 @@ No secrets anywhere. The chain:
 4. Entra matches issuer + subject (system:serviceaccount:velero:velero)
    against a federated identity credential on id-velero
 5. Entra returns an access token for id-velero
-6. id-velero holds Storage Blob Data Contributor on stovelerovinorg001
+6. id-velero holds Storage Blob Data Contributor on stovelerovinorg002
 7. Velero reads/writes blobs. useAAD: "true" — there is no key to fall back on
 ```
 
@@ -652,7 +652,7 @@ overwritten content, soft delete preserves *deleted* content. Both are on.
 ### 6.7 Blob layout
 
 ```
-stovelerovinorg001 / velero /
+stovelerovinorg002 / velero /
   primary/                        ← written by aks-dev-lab-001
     backups/<backup-name>/        metadata, tarballs, logs
     kopia/                        Kopia repository (volume data)
@@ -810,7 +810,7 @@ failover. Get the endpoint:
 
 ```bash
 terraform -chdir=infra/platform/velero output -raw secondary_blob_endpoint
-# https://stovelerovinorg001-secondary.blob.core.windows.net/
+# https://stovelerovinorg002-secondary.blob.core.windows.net/
 ```
 
 The secondary is read-only and lags the primary by the geo-replication delay
@@ -829,15 +829,15 @@ Entra auth (`--auth-mode login`) with an identity holding a blob data role:
 
 ```bash
 # list soft-deleted blobs
-az storage blob list --account-name stovelerovinorg001 --container-name velero \
+az storage blob list --account-name stovelerovinorg002 --container-name velero \
   --prefix primary/backups/ --include d --auth-mode login -o table
 
 # undelete
-az storage blob undelete --account-name stovelerovinorg001 \
+az storage blob undelete --account-name stovelerovinorg002 \
   --container-name velero --name "primary/backups/<backup>/<blob>" --auth-mode login
 
 # list versions of an overwritten blob
-az storage blob list --account-name stovelerovinorg001 --container-name velero \
+az storage blob list --account-name stovelerovinorg002 --container-name velero \
   --prefix primary/ --include v --auth-mode login -o table
 ```
 
@@ -1192,7 +1192,7 @@ last one — the failover itself is the easy part and rarely what is wrong.
 | 9 | Backups exist and are recent in **both** prefixes | `velero backup get` on each cluster | Hourly within the last hour; daily within 24 h |
 | 10 | **Actually restore something** | [§7.2](#72-restoring-the-primarys-backups-into-the-dr-cluster) — restore a primary backup into DR | Restore `Completed`, no warnings |
 | 11 | Velero identity still works | `kubectl -n velero logs deploy/velero \| grep -i "credential\|AADSTS"` | No credential errors |
-| 12 | Soft delete + versioning still on | `az storage account blob-service-properties show -n stovelerovinorg001 -g rg-velero-vinorg-001` | 30 days, versioning enabled |
+| 12 | Soft delete + versioning still on | `az storage account blob-service-properties show -n stovelerovinorg002 -g rg-velero-vinorg-001` | 30 days, versioning enabled |
 | 13 | Record the measured RTO | Wall clock from step 6 | Compare against the ~2–3 min target |
 
 Item 10 is the one people skip and the one that matters: an untested restore is
