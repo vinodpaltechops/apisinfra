@@ -96,18 +96,40 @@ jobs:
           set -euo pipefail
 
           terraform -chdir="$VELERO_LAYER" init -input=false -backend-config=../../backend.json >/dev/null
-          expected="$(terraform -chdir="$VELERO_LAYER" output -raw identity_client_id)"
 
-          actual="$(grep -oP 'azure\.workload\.identity/client-id:\s*"\K[^"]+' "$VELERO_VALUES" || true)"
+          # Each: <label> <terraform output> <pattern matching the value in the
+          # values file>. All three name Azure resources the velero layer owns,
+          # and all three fail the same silent way when stale — Velero installs
+          # clean and every backup dies at credentials or "account not found".
+          # A subscription move invalidates all of them at once.
+          fail=0
+          check() {
+            local label="$1" expected actual
+            expected="$(terraform -chdir="$VELERO_LAYER" output -raw "$2")"
+            # sort -u, not head -1: values-dr.yaml declares TWO storage
+            # locations (its own, plus the primary's read-only), and a stale
+            # value in only the second is exactly the kind of drift that would
+            # otherwise be found during a failover.
+            actual="$(grep -oP "$3" "$VELERO_VALUES" | sort -u || true)"
 
-          if [ "$actual" != "$expected" ]; then
-            echo "::error::$VELERO_VALUES has client-id '$actual' but the velero layer says '$expected'."
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::$VELERO_VALUES has $label '$actual' but the velero layer says '$expected'."
+              fail=1
+            else
+              echo "ok: $label matches the velero layer ($expected)"
+            fi
+          }
+
+          check "client-id"      identity_client_id   'azure\.workload\.identity/client-id:\s*"\K[^"]+'
+          check "subscriptionId" subscription_id      'subscriptionId:\s*\K\S+'
+          check "storageAccount" storage_account_name 'storageAccount:\s*\K\S+'
+
+          if [ "$fail" -ne 0 ]; then
             echo ""
-            echo "Set it in Git and commit — this is GitOps, so the file is the source of truth:"
-            echo "  sed -i 's|azure.workload.identity/client-id: \".*\"|azure.workload.identity/client-id: \"$expected\"|' $VELERO_VALUES"
+            echo "Fix them in Git and commit — this is GitOps, so the file is the source of truth."
+            echo "The velero layer prints every value:  terraform -chdir=$VELERO_LAYER output"
             exit 1
           fi
-          echo "Velero identity matches the velero layer: $expected"
 
       - name: Uninstall
         if: ${{ inputs.uninstall }}

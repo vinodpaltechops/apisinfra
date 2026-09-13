@@ -3,9 +3,13 @@
 org_name = "vinorg"
 location = "southindia" # primary region — must match the dev landing zone
 
-# Globally unique. If the apply fails with StorageAccountAlreadyTaken, change
-# this and re-run; nothing else references the literal name.
-storage_account_name = "stovelerovinorg001"
+# Globally unique across ALL of Azure — "001" is taken by a subscription this
+# stack no longer uses, which is why this is 002. If an apply fails with
+# StorageAccountAlreadyTaken, bump it again AND update the `storageAccount:`
+# lines in k8s/gitops/platform/velero/values-{dev,dr}.yaml, which name it
+# literally (Helm values, so Terraform cannot feed them). The argocd-bootstrap
+# guard compares the two and fails the run if they drift.
+storage_account_name = "stovelerovinorg002"
 
 # RAGRS = geo-replicated WITH a readable secondary. The secondary lands in
 # southindia's Azure pair (centralindia), NOT in the DR region — pairing is a

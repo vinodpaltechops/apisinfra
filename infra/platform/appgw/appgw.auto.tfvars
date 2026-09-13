@@ -56,8 +56,13 @@ http_redirect_to_https = false
 # User on key_vault_id — do not create that role assignment by hand as well, or
 # the apply fails with RoleAssignmentExists.
 #
-ssl_certificate_key_vault_secret_id = "https://kv-dev-lab-o6xycn.vault.azure.net/secrets/app-tls"
-key_vault_id                        = "/subscriptions/9a80f875-0d94-48c9-9502-c7814477ffad/resourceGroups/rg-spoke-dev-vinorg-001/providers/Microsoft.KeyVault/vaults/kv-dev-lab-o6xycn"
+# Commented out, not just unused: the vault they named lived in a subscription
+# this stack no longer deploys to, and its name carries a random suffix that the
+# rebuild will not reproduce. Both variables default to null, and nothing reads
+# them while enable_https = false. Fill them in from the NEW vault when you turn
+# HTTPS on — step 1 above prints it.
+# ssl_certificate_key_vault_secret_id = "https://kv-dev-lab-<suffix>.vault.azure.net/secrets/app-tls"
+# key_vault_id                        = "/subscriptions/<sub-id>/resourceGroups/rg-spoke-dev-vinorg-001/providers/Microsoft.KeyVault/vaults/kv-dev-lab-<suffix>"
 
 # ["Internet"] = a genuinely public site. While testing you can narrow this to
 # your own ISP range, e.g. ["163.223.165.0/24"], and widen it once it works.

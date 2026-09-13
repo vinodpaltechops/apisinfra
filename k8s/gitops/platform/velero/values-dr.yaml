@@ -22,7 +22,7 @@ serviceAccount:
       # THE SAME client id as values-dev.yaml. Both clusters federate into ONE
       # managed identity — that is what lets this cluster read backups the
       # primary wrote, without copying anything.
-      azure.workload.identity/client-id: "92e1d75d-83e1-4836-a838-dd0b5faa0862"
+      azure.workload.identity/client-id: "REPLACE_WITH_VELERO_IDENTITY_CLIENT_ID"
 
 podLabels:
   azure.workload.identity/use: "true"
@@ -49,8 +49,8 @@ configuration:
       default: true
       config:
         resourceGroup: rg-velero-vinorg-001
-        storageAccount: stovelerovinorg001
-        subscriptionId: 9a80f875-0d94-48c9-9502-c7814477ffad
+        storageAccount: stovelerovinorg002
+        subscriptionId: REPLACE_WITH_VELERO_SUBSCRIPTION_ID
         useAAD: "true"
 
     # ── 2) The PRIMARY cluster's backups, READ-ONLY ─────────────────────────
@@ -70,8 +70,8 @@ configuration:
       accessMode: ReadOnly
       config:
         resourceGroup: rg-velero-vinorg-001
-        storageAccount: stovelerovinorg001
-        subscriptionId: 9a80f875-0d94-48c9-9502-c7814477ffad
+        storageAccount: stovelerovinorg002
+        subscriptionId: REPLACE_WITH_VELERO_SUBSCRIPTION_ID
         useAAD: "true"
 
   # Explicitly EMPTY — see values-dev.yaml. Omitting this key renders a
