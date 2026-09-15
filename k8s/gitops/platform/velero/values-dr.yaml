@@ -50,7 +50,7 @@ configuration:
       config:
         resourceGroup: rg-velero-vinorg-001
         storageAccount: stovelerovinorg002
-        subscriptionId: REPLACE_WITH_VELERO_SUBSCRIPTION_ID
+        subscriptionId: "ee787618-7705-49f2-ae7a-cdd3ef107822"
         useAAD: "true"
 
     # ── 2) The PRIMARY cluster's backups, READ-ONLY ─────────────────────────
@@ -71,7 +71,7 @@ configuration:
       config:
         resourceGroup: rg-velero-vinorg-001
         storageAccount: stovelerovinorg002
-        subscriptionId: REPLACE_WITH_VELERO_SUBSCRIPTION_ID
+        subscriptionId: "ee787618-7705-49f2-ae7a-cdd3ef107822"
         useAAD: "true"
 
   # Explicitly EMPTY — see values-dev.yaml. Omitting this key renders a
