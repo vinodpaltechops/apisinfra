@@ -22,7 +22,7 @@ serviceAccount:
       # THE SAME client id as values-dev.yaml. Both clusters federate into ONE
       # managed identity — that is what lets this cluster read backups the
       # primary wrote, without copying anything.
-      azure.workload.identity/client-id: "REPLACE_WITH_VELERO_IDENTITY_CLIENT_ID"
+      azure.workload.identity/client-id: "2459c93f-e7f3-4c11-bc83-1648aaf37d22"
 
 podLabels:
   azure.workload.identity/use: "true"
