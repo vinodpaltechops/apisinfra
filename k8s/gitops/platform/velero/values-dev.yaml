@@ -80,7 +80,7 @@ configuration:
       config:
         resourceGroup: rg-velero-vinorg-001   # group holding the STORAGE ACCOUNT, not the cluster
         storageAccount: stovelerovinorg002
-        subscriptionId: "ee787618-7705-49f2-ae7a-cdd3ef107822"
+        subscriptionId: 'ee787618-7705-49f2-ae7a-cdd3ef107822'
         # Entra auth rather than a storage account key. The account is created
         # with shared_access_key_enabled = false, so there is no key to fall
         # back on — this is not optional.
