@@ -1,8 +1,14 @@
 # Committed + CI-loaded (see .gitignore `!*.auto.tfvars`). NO SECRETS here.
 # admin_password is NOT here — it comes from the GitHub secret
 # TF_VAR_ADMIN_PASSWORD (locally it stays in the gitignored terraform.tfvars).
-allowed_ip_rules       = ["163.223.165.0/24"] # your ISP range (KV secret seeding)
-mgmt_ssh_source_prefix = "163.223.165.0/24"   # SSH into the public mgmt VM
+# Your CURRENT public IP, as /32 rather than the ISP's whole /24 — the mgmt VM
+# is the one public door into this stack, so the allow-list should be as narrow
+# as it can be. Most home connections get a dynamic address: when SSH starts
+# timing out (not "connection refused" — the NSG drops the packet, so it hangs),
+# check `curl -s https://api.ipify.org`, update BOTH lines, and re-apply the dev
+# layer. A portal edit is reverted by the next apply.
+allowed_ip_rules       = ["106.51.211.95/32"] # your ISP range (KV secret seeding)
+mgmt_ssh_source_prefix = "106.51.211.95/32"   # SSH into the public mgmt VM
 
 # Lets the mgmt VM's identity run `az keyvault certificate import` for the App
 # Gateway TLS cert (the vault is private, so that only works from inside the
