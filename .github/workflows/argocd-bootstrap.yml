@@ -120,9 +120,13 @@ jobs:
             fi
           }
 
-          check "client-id"      identity_client_id   'azure\.workload\.identity/client-id:\s*"\K[^"]+'
-          check "subscriptionId" subscription_id      'subscriptionId:\s*\K\S+'
-          check "storageAccount" storage_account_name 'storageAccount:\s*\K\S+'
+          # `"?\K[^"\s]+` so quoted and unquoted YAML scalars both compare
+          # equal to Terraform's raw output. Both are valid YAML and the chart
+          # cannot tell them apart, so a guard that rejects one of them is
+          # reporting a formatting preference as a configuration error.
+          check "client-id"      identity_client_id   'azure\.workload\.identity/client-id:\s*"?\K[^"\s]+'
+          check "subscriptionId" subscription_id      'subscriptionId:\s*"?\K[^"\s]+'
+          check "storageAccount" storage_account_name 'storageAccount:\s*"?\K[^"\s]+'
 
           if [ "$fail" -ne 0 ]; then
             echo ""
