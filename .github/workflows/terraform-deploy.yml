@@ -147,7 +147,27 @@ jobs:
     with: { layer_path: infra/platform/appgw-dr, apply: true }
     secrets: inherit
 
-  # 9) Front Door — DISABLED: not available on this subscription.
+  # 9) Traffic Manager — the global entry point ACTUALLY IN USE, standing in
+  #    for Front Door (job 10), which this subscription tier forbids.
+  #
+  #    DNS-based failover rather than a proxy: it answers with the healthy
+  #    region's gateway IP and is then out of the path. Slower and coarser than
+  #    Front Door — see the long note in infra/modules/trafficmanager — but it
+  #    is the difference between automatic failover and editing a DNS record
+  #    during an incident.
+  #
+  #    Inert until app.<domain> becomes a CNAME to *.trafficmanager.net:
+  #      terraform -chdir=infra/platform/trafficmanager output dns_records
+  #
+  #    NEVER run this and job 10 at the same time. Two systems owning the same
+  #    hostname's failover is how a failover ends up pointing at a dead region.
+  trafficmanager:
+    needs: [appgw, appgw-dr]
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/trafficmanager, apply: true }
+    secrets: inherit
+
+  # 10) Front Door — DISABLED: not available on this subscription.
   #
   #    Azure refuses Front Door on Free Trial and Student subscriptions:
   #      Code="BadRequest" Message="Free Trial and Student account is forbidden
