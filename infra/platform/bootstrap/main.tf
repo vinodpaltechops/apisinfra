@@ -181,6 +181,9 @@ resource "azurerm_storage_container" "layers" {
     "velero",
     "appgw-dr",
     "frontdoor",
+    # Traffic Manager — the global entry point actually in use. Front Door is
+    # forbidden on this subscription tier, so its container stays above unused.
+    "trafficmanager",
   ])
 
   name                  = each.key
