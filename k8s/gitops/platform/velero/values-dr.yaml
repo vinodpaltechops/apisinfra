@@ -49,7 +49,7 @@ configuration:
       default: true
       config:
         resourceGroup: rg-velero-vinorg-001
-        storageAccount: stovelerovinorg002
+        storageAccount: stovelerovinorg003
         subscriptionId: "ee787618-7705-49f2-ae7a-cdd3ef107822"
         useAAD: "true"
 
@@ -70,7 +70,7 @@ configuration:
       accessMode: ReadOnly
       config:
         resourceGroup: rg-velero-vinorg-001
-        storageAccount: stovelerovinorg002
+        storageAccount: stovelerovinorg003
         subscriptionId: "ee787618-7705-49f2-ae7a-cdd3ef107822"
         useAAD: "true"
 

@@ -10,9 +10,9 @@ variable "location" {
 }
 
 variable "storage_account_name" {
-  description = "Globally unique name for the backup store. Change it if `az storage account check-name -n <name>` says it is taken."
+  description = "Override for the backup store's name. Leave null: it is derived from infra/backend.json (stotfstate... -> stovelero...), so one bump there renames both accounts. Must still be globally unique — check with `az storage account check-name -n <name>`."
   type        = string
-  default     = "stovelerovinorg002"
+  default     = null
 }
 
 variable "account_replication_type" {

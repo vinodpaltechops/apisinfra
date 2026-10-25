@@ -26,7 +26,7 @@ backup store, and GitOps keeping both clusters on the same commit.
                │                          │
                └──────────┬───────────────┘
                           ▼
-              stovelerovinorg002  (RAGRS blob)
+              stovelerovinorg003  (RAGRS blob)
               primary/  ← written by dev, read by both
               dr/       ← written by dr
 ```
