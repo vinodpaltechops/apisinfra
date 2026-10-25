@@ -64,13 +64,11 @@ jobs:
               echo "AKS_RESOURCE_GROUP=${{ vars.AKS_RESOURCE_GROUP || 'rg-spoke-dev-vinorg-001' }}" >> "$GITHUB_ENV"
               echo "AKS_CLUSTER_NAME=${{ vars.AKS_CLUSTER_NAME || 'aks-dev-lab-001' }}"             >> "$GITHUB_ENV"
               echo "ROOT_APP=k8s/gitops/bootstrap/root-app-dev.yaml"                                >> "$GITHUB_ENV"
-              echo "VELERO_VALUES=k8s/gitops/platform/velero/values-dev.yaml"                       >> "$GITHUB_ENV"
               ;;
             dr)
               echo "AKS_RESOURCE_GROUP=${{ vars.AKS_DR_RESOURCE_GROUP || 'rg-spoke-dr-vinorg-001' }}" >> "$GITHUB_ENV"
               echo "AKS_CLUSTER_NAME=${{ vars.AKS_DR_CLUSTER_NAME || 'aks-dr-lab-001' }}"             >> "$GITHUB_ENV"
               echo "ROOT_APP=k8s/gitops/bootstrap/root-app-dr.yaml"                                   >> "$GITHUB_ENV"
-              echo "VELERO_VALUES=k8s/gitops/platform/velero/values-dr.yaml"                          >> "$GITHUB_ENV"
               ;;
           esac
 
@@ -80,76 +78,10 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # ── Guard: refuse to bootstrap with an unconfigured Velero identity ──────
-      # Argo CD would happily sync a Velero whose ServiceAccount carries the
-      # literal string REPLACE_WITH_... It comes up healthy and every backup
-      # fails at "failed to get credentials" — a backup system that looks
-      # installed and protects nothing. Catch it here, with the value to paste.
       - uses: hashicorp/setup-terraform@v3
         if: ${{ !inputs.uninstall }}
         with:
           terraform_version: ${{ env.TF_VERSION }}
-
-      - name: Verify Velero identity is wired up
-        if: ${{ !inputs.uninstall }}
-        run: |
-          set -euo pipefail
-
-          terraform -chdir="$VELERO_LAYER" init -input=false -backend-config=../../backend.json >/dev/null
-
-          # Each: <label> <terraform output> <pattern matching the value in the
-          # values file>. All three name Azure resources the velero layer owns,
-          # and all three fail the same silent way when stale — Velero installs
-          # clean and every backup dies at credentials or "account not found".
-          # A subscription move invalidates all of them at once.
-          fail=0
-          check() {
-            local label="$1" expected actual
-            expected="$(terraform -chdir="$VELERO_LAYER" output -raw "$2")"
-            # sort -u, not head -1: values-dr.yaml declares TWO storage
-            # locations (its own, plus the primary's read-only), and a stale
-            # value in only the second is exactly the kind of drift that would
-            # otherwise be found during a failover.
-            actual="$(grep -oP "$3" "$VELERO_VALUES" | sort -u || true)"
-
-            if [ "$actual" != "$expected" ]; then
-              echo "::error::$VELERO_VALUES has $label '$actual' but the velero layer says '$expected'."
-              fail=1
-            else
-              echo "ok: $label matches the velero layer ($expected)"
-            fi
-          }
-
-          # `"?\K[^"\s]+` so quoted and unquoted YAML scalars both compare
-          # equal to Terraform's raw output. Both are valid YAML and the chart
-          # cannot tell them apart, so a guard that rejects one of them is
-          # reporting a formatting preference as a configuration error.
-          check "client-id"      identity_client_id   'azure\.workload\.identity/client-id:\s*"?\K[^"\s]+'
-          check "subscriptionId" subscription_id      'subscriptionId:\s*"?\K[^"\s]+'
-          check "storageAccount" storage_account_name 'storageAccount:\s*"?\K[^"\s]+'
-
-          if [ "$fail" -ne 0 ]; then
-            echo ""
-            echo "Fix them in Git and commit — this is GitOps, so the file is the source of truth."
-            echo "The velero layer prints every value:  terraform -chdir=$VELERO_LAYER output"
-            exit 1
-          fi
-
-      - name: Uninstall
-        if: ${{ inputs.uninstall }}
-        run: |
-          # Delete the root Application FIRST. Its resources-finalizer cascades
-          # to every child, so removing Argo CD before it would orphan every
-          # component — still running, with nothing managing them.
-          az aks command invoke \
-            --resource-group "$AKS_RESOURCE_GROUP" \
-            --name "$AKS_CLUSTER_NAME" \
-            --command "kubectl -n $ARGOCD_NAMESPACE delete application --all --wait=true --timeout=5m || true"
-
-          az aks command invoke \
-            --resource-group "$AKS_RESOURCE_GROUP" \
-            --name "$AKS_CLUSTER_NAME" \
-            --command "helm uninstall argocd --namespace $ARGOCD_NAMESPACE"
 
       - uses: azure/setup-helm@v4
         if: ${{ !inputs.uninstall }}
@@ -182,6 +114,58 @@ jobs:
             --command "helm upgrade --install argocd ./${chart} --namespace $ARGOCD_NAMESPACE --create-namespace --values argocd-values.yaml --wait --timeout 10m" \
             --file "$chart" \
             --file argocd-values.yaml
+
+      # ── Cluster secret: where Velero's Azure identifiers come from ──────────
+      # k8s/gitops/apps/<cluster>/velero.yaml is an ApplicationSet whose cluster
+      # generator reads THIS secret's labels and annotations. The values are the
+      # velero Terraform layer's outputs, so a new subscription, resource group
+      # or storage account never needs a commit — re-run this workflow.
+      #
+      # `terraform output -raw` fails on an unapplied layer, so a half-built
+      # stack stops here with the real reason, rather than installing a Velero
+      # whose every backup fails at credentials.
+      #
+      # Declaring "in-cluster" explicitly replaces Argo CD's implicit entry for
+      # it, which carries no annotations.
+      - name: Register cluster and Velero settings
+        if: ${{ !inputs.uninstall }}
+        run: |
+          set -euo pipefail
+
+          terraform -chdir="$VELERO_LAYER" init -input=false -backend-config=../../backend.json >/dev/null
+          out() { terraform -chdir="$VELERO_LAYER" output -raw "$1"; }
+
+          cat > cluster-secret.yaml <<YAML
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: cluster-in-cluster
+            namespace: ${ARGOCD_NAMESPACE}
+            labels:
+              argocd.argoproj.io/secret-type: cluster
+              gitops.vinorg/cluster: ${{ inputs.cluster }}
+            annotations:
+              veleroResourceGroup: "$(out resource_group_name)"
+              veleroStorageAccount: "$(out storage_account_name)"
+              veleroSubscriptionId: "$(out subscription_id)"
+              veleroClientId: "$(out identity_client_id)"
+          stringData:
+            name: in-cluster
+            server: https://kubernetes.default.svc
+            config: '{"tlsClientConfig":{"insecure":false}}'
+          YAML
+
+          # Nothing secret in it, but print what was resolved: this is the one
+          # place to see what Velero will be configured with.
+          grep -A4 'annotations:' cluster-secret.yaml
+
+          az aks command invoke \
+            --resource-group "$AKS_RESOURCE_GROUP" \
+            --name "$AKS_CLUSTER_NAME" \
+            --command "kubectl apply -f cluster-secret.yaml" \
+            --file cluster-secret.yaml
+
+          rm -f cluster-secret.yaml
 
       # ── Repository credentials — REQUIRED because this repo is PRIVATE ────────
       # Argo CD clones over HTTPS with no credentials by default. Against a

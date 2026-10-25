@@ -39,13 +39,12 @@ dex:
 # Not used: with one Argo CD per cluster there is no cluster generator to fan
 # out over, and the app-of-apps pattern covers everything else.
 #
-# NOTE: `applicationSet.enabled` does NOT exist in chart 7.x — unlike dex and
-# notifications, this component's Deployment template carries no conditional, so
-# setting `enabled: false` is silently ignored and the controller runs anyway.
-# replicas: 0 is the only way to end up with no pod. The Deployment object still
-# exists; it just never schedules anything.
+# Runs the ApplicationSet controller: apps/<cluster>/velero.yaml is an
+# ApplicationSet, which fills in Azure identifiers from the cluster secret that
+# argocd-bootstrap writes. (`applicationSet.enabled` does not exist in chart
+# 7.x; replicas is the only switch.)
 applicationSet:
-  replicas: 0
+  replicas: 1
 
 # Slack/email notification routing — nothing to route to yet. Alerting on failed
 # syncs goes through Container Insights, which already scrapes this cluster.
