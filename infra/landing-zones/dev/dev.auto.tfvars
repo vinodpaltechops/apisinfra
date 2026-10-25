@@ -9,7 +9,7 @@
 #
 # To lock it down again, set a CIDR here (e.g. your ISP's /24) and re-apply.
 allowed_ip_rules       = ["163.223.164.0/24"] # your ISP range (KV secret seeding)
-mgmt_ssh_source_prefix = "Internet" # NSG service tag: any public address
+mgmt_ssh_source_prefix = "Internet"           # NSG service tag: any public address
 
 # Lets the mgmt VM's identity run `az keyvault certificate import` for the App
 # Gateway TLS cert (the vault is private, so that only works from inside the
