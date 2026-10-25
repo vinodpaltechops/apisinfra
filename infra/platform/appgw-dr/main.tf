@@ -78,6 +78,35 @@ data "terraform_remote_state" "dr" {
   })
 }
 
+# The vault is created by the dev landing zone with a random name suffix, so its
+# URI and resource ID are read from that state rather than typed. try() keeps
+# this layer plannable before dev has been re-applied with the key_vault_id
+# output; the gateway module then reports the missing certificate source itself.
+data "terraform_remote_state" "dev" {
+  backend = "azurerm"
+  config = merge(local.tfstate_backend, {
+    container_name = "landing-zones-dev"
+    key            = "landing-zones-dev.tfstate"
+  })
+}
+
+locals {
+  dev_key_vault_id  = try(data.terraform_remote_state.dev.outputs.key_vault_id, null)
+  dev_key_vault_uri = try(data.terraform_remote_state.dev.outputs.key_vault_uri, null)
+
+  # Explicit variables win; otherwise the SAME certificate the primary gateway
+  # uses, from dev's vault.
+  use_vault_cert = var.enable_https
+
+  key_vault_id = local.use_vault_cert ? coalesce(var.key_vault_id, local.dev_key_vault_id) : null
+
+  # UNVERSIONED secret URL, so the gateway follows rotations by itself.
+  ssl_certificate_key_vault_secret_id = local.use_vault_cert ? coalesce(
+    var.ssl_certificate_key_vault_secret_id,
+    local.dev_key_vault_uri == null ? null : "${trimsuffix(local.dev_key_vault_uri, "/")}/secrets/${var.ssl_certificate_secret_name}",
+  ) : null
+}
+
 module "appgw" {
   source = "../../modules/appgw"
 
@@ -129,8 +158,8 @@ module "appgw" {
   # Key Vault Secrets User — a second, separate assignment from the primary's.
   enable_https                        = var.enable_https
   http_redirect_to_https              = var.http_redirect_to_https
-  ssl_certificate_key_vault_secret_id = var.ssl_certificate_key_vault_secret_id
-  key_vault_id                        = var.key_vault_id
+  ssl_certificate_key_vault_secret_id = local.ssl_certificate_key_vault_secret_id
+  key_vault_id                        = local.key_vault_id
 
   tags = local.tags
 }

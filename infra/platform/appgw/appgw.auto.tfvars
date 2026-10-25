@@ -15,54 +15,36 @@ waf_mode = "Prevention"
 # false = HTTP only. Flip to true once the certificate is in Key Vault and the
 # two settings below are filled in. Toggling does not change the public IP, so
 # the GoDaddy A record keeps working either way.
-enable_https = false
+enable_https = true
 
 # Only read when enable_https = true.
 #   true  — :80 permanently redirects to :443 (right answer for a public site)
 #   false — :80 keeps serving the app too, so http:// and https:// both work
-http_redirect_to_https = false
+http_redirect_to_https = true
 
-# ── STALE VAULT REFERENCE — read before flipping enable_https back to true ────
-# The two IDs below name kv-dev-lab-d5f9ug, the vault from a PREVIOUS
-# deployment. That vault no longer exists: the whole stack is currently torn
-# down (only rg-tfstate-vinorg-001 remains).
+# ── Certificate: read from the dev landing zone's vault ───────────────────────
+# Nothing to type. With enable_https = true the vault's resource ID and URI come
+# from the dev landing zone's state (outputs key_vault_id / key_vault_uri), and
+# the secret URL is "<vault uri>secrets/<ssl_certificate_secret_name>" — so a
+# rebuild's new random vault suffix is picked up automatically.
 #
-# The keyvault module names the vault kv-${env}-lab-${random_string.suffix}
-# (infra/modules/keyvault/main.tf), so a fresh apply generates a DIFFERENT
-# 6-character suffix. Pointing a gateway at the old name fails when it tries to
-# fetch the certificate, and the error surfaces as
-# ApplicationGatewayKeyVaultSecretAccessDenied — which reads like an RBAC
-# problem, not a wrong-name problem.
+# What stays manual is putting the certificate INTO the vault, under the name in
+# ssl_certificate_secret_name (default "app-tls"): it must be done from inside
+# the VNet (the vault has no public endpoint) — see docs/public-endpoint.md.
+# Applying with enable_https = true BEFORE that fails with
+# ApplicationGatewayKeyVaultSecretAccessDenied, which reads like an RBAC problem
+# but just means the secret is not there yet.
 #
-# So enable_https is false for the rebuild. That is a COMPLETE configuration,
-# not a broken one: the gateway serves the app on :80 and needs no certificate
-# at all. After the dev landing zone applies:
+# Dev must have been re-applied once so it exports key_vault_id.
+# ssl_certificate_secret_name = "app-tls"
 #
-#   1. terraform -chdir=infra/landing-zones/dev output key_vault_uri
-#   2. import the cert into THAT vault (see docs/public-endpoint.md — it must be
-#      done from inside the VNet, i.e. from the mgmt VM)
-#   3. replace both IDs here AND in appgw-dr.auto.tfvars with the new name
-#   4. set enable_https = true and re-apply both gateway layers
-#
-# Both files must be updated together — the two gateways share one certificate
-# precisely so there is only ever one renewal to remember.
-#
-# Import the certificate into Key Vault first (portal or
-# `az keyvault certificate import`, from inside the VNet — the vault has no
-# public endpoint), then uncomment both. Use the UNVERSIONED secret URL so the
-# gateway follows rotations automatically.
-#
+# Both gateways share ONE certificate: appgw-dr reads the same vault.
 # The module creates its own managed identity and grants it Key Vault Secrets
-# User on key_vault_id — do not create that role assignment by hand as well, or
-# the apply fails with RoleAssignmentExists.
+# User — do not create that role assignment by hand, or the apply fails with
+# RoleAssignmentExists.
 #
-# Commented out, not just unused: the vault they named lived in a subscription
-# this stack no longer deploys to, and its name carries a random suffix that the
-# rebuild will not reproduce. Both variables default to null, and nothing reads
-# them while enable_https = false. Fill them in from the NEW vault when you turn
-# HTTPS on — step 1 above prints it.
-# ssl_certificate_key_vault_secret_id = "https://kv-dev-lab-<suffix>.vault.azure.net/secrets/app-tls"
-# key_vault_id                        = "/subscriptions/<sub-id>/resourceGroups/rg-spoke-dev-vinorg-001/providers/Microsoft.KeyVault/vaults/kv-dev-lab-<suffix>"
+# To pin a specific vault or secret instead, set ssl_certificate_key_vault_secret_id
+# and key_vault_id here; explicit values win.
 
 # ["Internet"] = a genuinely public site. While testing you can narrow this to
 # your own ISP range, e.g. ["163.223.165.0/24"], and widen it once it works.
