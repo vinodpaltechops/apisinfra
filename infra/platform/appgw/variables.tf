@@ -62,9 +62,16 @@ variable "http_redirect_to_https" {
   default     = true
 }
 
+variable "ssl_certificate_secret_name" {
+  description = "Name of the certificate in the vault (the `--name` given to `az keyvault certificate import`). The full secret URL is built from the dev vault's URI plus this."
+  type        = string
+  default     = "app-tls"
+}
+
 variable "ssl_certificate_key_vault_secret_id" {
   description = <<-EOT
-    Unversioned Key Vault SECRET id of the certificate, e.g.
+    OPTIONAL override. By default the URL is built from the dev vault's URI and
+    ssl_certificate_secret_name. Unversioned Key Vault SECRET id, e.g.
       https://kv-dev-lab-xxxx.vault.azure.net/secrets/app-tls
 
     The gateway fetches it at runtime, so the private key never enters
@@ -77,7 +84,7 @@ variable "ssl_certificate_key_vault_secret_id" {
 }
 
 variable "key_vault_id" {
-  description = "Resource ID of the vault holding the certificate. Required with ssl_certificate_key_vault_secret_id — the module grants its own managed identity Key Vault Secrets User at this scope, so no manual role assignment is needed."
+  description = "OPTIONAL override — by default taken from the dev landing zone's key_vault_id output. Resource ID of the vault holding the certificate. Required with ssl_certificate_key_vault_secret_id — the module grants its own managed identity Key Vault Secrets User at this scope, so no manual role assignment is needed."
   type        = string
   default     = null
 }
