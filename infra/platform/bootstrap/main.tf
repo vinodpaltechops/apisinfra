@@ -184,6 +184,8 @@ resource "azurerm_storage_container" "layers" {
     # Traffic Manager — the global entry point actually in use. Front Door is
     # forbidden on this subscription tier, so its container stays above unused.
     "trafficmanager",
+    # Public Azure DNS zone + the app record that points at Traffic Manager.
+    "dns",
   ])
 
   name                  = each.key

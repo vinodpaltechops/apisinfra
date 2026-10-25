@@ -54,6 +54,16 @@ jobs:
   #   terraform -chdir=infra/platform/velero destroy
   # ─────────────────────────────────────────────────────────────────────────────
 
+  # 0.  Azure DNS — before everything, for the same plan-time reason as below:
+  #     it reads the Traffic Manager state, so it must go while that is intact.
+  #     Before this runs, set the registrar's nameservers back to GoDaddy's;
+  #     destroying a zone the domain is still delegated to fails every lookup.
+  dns:
+    needs: guard
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/dns, destroy: true }
+    secrets: inherit
+
   # 0a) Traffic Manager — the global entry point ACTUALLY IN USE, so it goes
   #     first. Before this runs, point app_fqdn away from the *.trafficmanager.net
   #     CNAME: destroying the profile while the CNAME still targets it leaves the
@@ -73,7 +83,7 @@ jobs:
   #     no longer destroyable by Terraform. Recovering means deleting the
   #     resource group by hand and dropping the layer's state.
   trafficmanager:
-    needs: guard
+    needs: dns
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/platform/trafficmanager, destroy: true }
     secrets: inherit

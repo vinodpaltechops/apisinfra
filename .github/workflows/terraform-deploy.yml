@@ -167,6 +167,17 @@ jobs:
     with: { layer_path: infra/platform/trafficmanager, apply: true }
     secrets: inherit
 
+  # 9b) Azure DNS — the public zone and the app CNAME to Traffic Manager.
+  #
+  #    Creating the zone changes nothing for users: the internet keeps asking
+  #    GoDaddy until the nameservers are switched at the registrar by hand.
+  #      terraform -chdir=infra/platform/dns output delegation
+  dns:
+    needs: trafficmanager
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/dns, apply: true }
+    secrets: inherit
+
   # 10) Front Door — DISABLED: not available on this subscription.
   #
   #    Azure refuses Front Door on Free Trial and Student subscriptions:
