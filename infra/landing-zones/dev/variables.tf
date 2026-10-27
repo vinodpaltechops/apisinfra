@@ -3,9 +3,17 @@ variable "org_name" {
   default = "vinorg"
 }
 
+# centralindia, not southindia: Application Gateway for Containers is not
+# available in southindia, and it must sit in the same VNet (so region) as AKS.
 variable "location" {
   type    = string
-  default = "southindia"
+  default = "centralindia"
+}
+
+variable "aks_authorized_ip_ranges" {
+  description = "CIDRs allowed to reach the public AKS API server — your laptop's egress IP as /32 (curl -s https://api.ipify.org). Empty leaves the endpoint open to the internet (Entra ID + Azure RBAC still apply). Not needed for the pipelines, which use `az aks command invoke`."
+  type        = list(string)
+  default     = []
 }
 
 variable "admin_password" {
