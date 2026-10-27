@@ -20,7 +20,12 @@ name: terraform-deploy
 
 on:
   push:
-    branches: [main]
+    # feat/agc-centralindia: runs the deploy from the AGC branch so it can be
+    # validated end to end before merging. Remove it (back to [main]) at merge.
+    # Needs a federated credential on the Azure app registration for the subject
+    #   repo:vinodpaltechops/apisinfra:ref:refs/heads/feat/agc-centralindia
+    # Without it the OIDC login fails on every layer, starting with the first.
+    branches: [main, feat/agc-centralindia]
     paths:
       - "infra/**"
       - ".github/workflows/**"
@@ -83,6 +88,18 @@ jobs:
     needs: dev
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/platform/appgw, apply: true }
+    secrets: inherit
+
+  # 5b) Application Gateway for Containers — the Gateway API entry point, in
+  #     the dev spoke. Reads dev's state (spoke VNet, AKS OIDC issuer), so unlike
+  #     appgw it must follow dev. It runs alongside appgw: nothing is routed
+  #     through it until DNS points at its frontend, and the cluster half (ALB
+  #     Controller + Gateway) is deployed by Argo CD, not here.
+  #     Needs the `agc` state container — re-apply bootstrap once first.
+  agc:
+    needs: dev
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/agc, apply: true }
     secrets: inherit
 
   # ─────────────────────────────────────────────────────────────────────────────
