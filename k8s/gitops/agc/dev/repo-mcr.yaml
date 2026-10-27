@@ -1,0 +1,21 @@
+# Registers Microsoft's public OCI registry as a Helm repository, so Argo CD can
+# pull the ALB Controller chart. Argo CD only treats an OCI source as a Helm
+# chart when the registry is declared this way, with enableOCI.
+#
+# No credentials: the registry is anonymous. Nothing secret in this Secret, so
+# it is safe to keep in Git.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: repo-mcr-helm-oci
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: repository
+  annotations:
+    # Registered before the ALB Controller Application tries to use it.
+    argocd.argoproj.io/sync-wave: "-2"
+stringData:
+  type: helm
+  name: mcr-application-lb
+  url: mcr.microsoft.com/application-lb/charts
+  enableOCI: "true"
