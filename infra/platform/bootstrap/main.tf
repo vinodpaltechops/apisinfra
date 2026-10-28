@@ -79,6 +79,7 @@ locals {
     "Microsoft.OperationalInsights",  # Log Analytics workspace
     "Microsoft.OperationsManagement", # AKS Container Insights (oms_agent)
     "Microsoft.PolicyInsights",       # policy compliance + DINE remediation
+    "Microsoft.ServiceNetworking",    # Application Gateway for Containers (platform/agc, via azapi)
     "Microsoft.Storage",              # this layer's state account, Velero backup store
   ])
 }

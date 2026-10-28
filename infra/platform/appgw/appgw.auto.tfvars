@@ -15,12 +15,20 @@ waf_mode = "Prevention"
 # false = HTTP only. Flip to true once the certificate is in Key Vault and the
 # two settings below are filled in. Toggling does not change the public IP, so
 # the GoDaddy A record keeps working either way.
-enable_https = true
+#
+# HTTP-only for now: the dev vault was recreated empty by the move to
+# centralindia, and applying with true before app-tls is imported fails with
+# ApplicationGatewayKeyVaultSecretNotFound. To turn it back on: import the
+# certificate (docs/public-endpoint.md, step 6), set both values below to true,
+# and re-apply. Matches appgw-dr.auto.tfvars.
+enable_https = false
 
 # Only read when enable_https = true.
 #   true  — :80 permanently redirects to :443 (right answer for a public site)
 #   false — :80 keeps serving the app too, so http:// and https:// both work
-http_redirect_to_https = true
+# Must be false while HTTPS is off, or :80 would redirect to a port with no
+# listener.
+http_redirect_to_https = false
 
 # ── Certificate: read from the dev landing zone's vault ───────────────────────
 # Nothing to type. With enable_https = true the vault's resource ID and URI come
