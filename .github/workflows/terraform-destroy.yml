@@ -40,18 +40,114 @@ jobs:
           fi
           echo "Confirmed — destroying layers one by one, in reverse order."
 
-  # 1) Application Gateway — destroyed FIRST: it is the outermost layer and
-  #    holds a subnet inside the hub VNet, which connectivity cannot delete
-  #    while that subnet is still in use.
-  appgw:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # DR LAYERS — destroyed FIRST, in reverse of the deploy order.
+  #
+  # TO REMOVE DR: comment out this block AND change the `dev` job below from
+  #   needs: [appgw, dr, agc]   back to   needs: [appgw, agc]
+  # That is the only other reference to these jobs. Leaving it pointing at a
+  # commented-out job makes the whole workflow fail to parse.
+  #
+  # infra/platform/velero is DELIBERATELY ABSENT from this pipeline. It holds
+  # the backup storage account, and destroying it deletes every backup — the one
+  # thing a teardown must never take with it. Tear it down by hand, on purpose:
+  #   terraform -chdir=infra/platform/velero destroy
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  # 0.  Azure DNS — before everything, for the same plan-time reason as below:
+  #     it reads the Traffic Manager state, so it must go while that is intact.
+  #     Before this runs, set the registrar's nameservers back to GoDaddy's;
+  #     destroying a zone the domain is still delegated to fails every lookup.
+  dns:
     needs: guard
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/dns, destroy: true }
+    secrets: inherit
+
+  # 0a) Traffic Manager — the global entry point ACTUALLY IN USE, so it goes
+  #     first. Before this runs, point app_fqdn away from the *.trafficmanager.net
+  #     CNAME: destroying the profile while the CNAME still targets it leaves the
+  #     hostname resolving to nothing (NXDOMAIN), which is a hard outage rather
+  #     than a graceful fallback.
+  #
+  #     ORDER IS LOAD-BEARING, and it is not just about resource dependencies.
+  #     This layer's endpoint targets come from the appgw and appgw-dr remote
+  #     states, and those are READ AT PLAN TIME — including the plan for its own
+  #     destroy. Once those layers are destroyed their state files are empty, and
+  #     this layer can no longer plan anything at all:
+  #
+  #       Error: Unsupported attribute
+  #         data.terraform_remote_state.appgw.outputs is object with no attributes
+  #
+  #     At that point the profile is orphaned: still running, still billed, and
+  #     no longer destroyable by Terraform. Recovering means deleting the
+  #     resource group by hand and dropping the layer's state.
+  trafficmanager:
+    needs: dns
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/trafficmanager, destroy: true }
+    secrets: inherit
+
+  # 0b) Front Door — outermost. Before this runs, point app_fqdn back at the
+  #     primary gateway's A record: destroying Front Door while the CNAME still
+  #     targets its endpoint is a hard outage, not a graceful fallback.
+  #
+  #     KEPT ENABLED even though the matching DEPLOY job is commented out (Front
+  #     Door is forbidden on Free Trial subscriptions). That is deliberate, not
+  #     an oversight: the layer got as far as creating rg-frontdoor-vinorg-001
+  #     before the profile was refused, so there IS state to tear down. A destroy
+  #     against a layer holding only a resource group succeeds cleanly, and
+  #     removing this job would strand that group outside Terraform's knowledge.
+  frontdoor:
+    needs: trafficmanager
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/frontdoor, destroy: true }
+    secrets: inherit
+
+  # 0c) DR Application Gateway — holds a subnet in the DR spoke VNet, which the
+  #     DR landing zone cannot delete while it is in use.
+  appgw-dr:
+    needs: frontdoor
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/appgw-dr, destroy: true }
+    secrets: inherit
+
+  # 0d) DR landing zone — before dev, because it reads dev's state (mgmt VM
+  #     identity, shared ACR, jump VNet) and owns both halves of the
+  #     jump↔DR-spoke peering.
+  dr:
+    needs: appgw-dr
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/landing-zones/dr, destroy: true }
+    secrets: inherit
+
+  # 1) Application Gateway — the outermost of the original layers, and it holds
+  #    a subnet inside the hub VNet which connectivity cannot delete while that
+  #    subnet is still in use.
+  appgw:
+    needs: trafficmanager
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/platform/appgw, destroy: true }
     secrets: inherit
 
-  # 2) Dev landing zone
+  # 1c) Application Gateway for Containers — holds a delegated subnet inside the
+  #     dev spoke VNet, which the landing zone cannot delete while it is in use,
+  #     and reads dev's state for plan. Same position as appgw.
+  agc:
+    needs: trafficmanager
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/agc, destroy: true }
+    secrets: inherit
+
+  # 2) Dev landing zone — waits on BOTH the primary gateway and the entire DR
+  #    chain. The DR layer reads dev's state for the mgmt VM identity, the shared
+  #    ACR and the jump VNet, and owns both halves of the jump↔DR-spoke peering.
+  #    Destroying dev first would pull those out from under a DR layer that is
+  #    still being destroyed.
+  #
+  #    Without the DR block above, this reverts to `needs: appgw`.
   dev:
-    needs: appgw
+    needs: [appgw, dr, agc]
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/landing-zones/dev, destroy: true }
     secrets: inherit

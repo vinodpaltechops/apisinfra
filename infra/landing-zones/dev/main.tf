@@ -13,10 +13,10 @@ terraform {
     }
   }
   backend "azurerm" {
-    resource_group_name  = "rg-tfstate-vinorg-001"
-    storage_account_name = "stotfstatevinorg001"
-    container_name       = "landing-zones-dev"
-    key                  = "landing-zones-dev.tfstate"
+    # resource_group_name + storage_account_name come from infra/backend.json:
+    #   terraform init -backend-config=../../backend.json
+    container_name = "landing-zones-dev"
+    key            = "landing-zones-dev.tfstate"
   }
 }
 
@@ -49,8 +49,10 @@ locals {
   # so it must not overlap any spoke/hub address space.
   aks_pod_cidr = "192.168.0.0/16"
 
-  # Jump VM lives in a different region so it draws on that region's separate
-  # vCPU quota — southindia's 4 vCPU is reserved for the 2-node AKS.
+  # The jump VNet predates the move of the dev spoke to centralindia (needed
+  # because Application Gateway for Containers is not offered in southindia).
+  # With every VM commented out it is an empty network now; kept so the VMs can
+  # come back, and because removing it is a separate change.
   jump_location      = "centralindia"
   jump_address_space = "10.4.0.0/24"
 
@@ -70,15 +72,19 @@ locals {
   aks_dns_zone_id         = data.terraform_remote_state.connectivity.outputs.aks_private_dns_zone_id
 }
 
+# State storage account + resource group. Same file `terraform init` reads via
+# -backend-config, so the name lives in exactly one place.
+locals {
+  tfstate_backend = jsondecode(file("${path.module}/../../backend.json"))
+}
+
 # Hub outputs come from the connectivity platform layer (separate state).
 data "terraform_remote_state" "connectivity" {
   backend = "azurerm"
-  config = {
-    resource_group_name  = "rg-tfstate-vinorg-001"
-    storage_account_name = "stotfstatevinorg001"
-    container_name       = "connectivity"
-    key                  = "connectivity.tfstate"
-  }
+  config = merge(local.tfstate_backend, {
+    container_name = "connectivity"
+    key            = "connectivity.tfstate"
+  })
 }
 
 # ── Spoke network: RG + VNet + subnets + NSG + UDR ────────────────────────────
@@ -172,21 +178,28 @@ module "peering_jump" {
 # from here `ssh -A azureadmin@<jump-private-ip>` to reach the private jump VM,
 # or test the private endpoints directly (jump VNet is peered to hub + spoke and
 # uses the hub resolver for DNS).
-module "linux_vm_mgmt" {
-  source = "../../modules/linux-vm"
-
-  env                 = local.env
-  role                = "mgmt"
-  resource_group_name = module.spoke_network.resource_group_name
-  location            = local.jump_location
-  subnet_id           = module.jump_network.subnet_id
-  enable_public_ip    = true
-  ssh_source_prefix   = var.mgmt_ssh_source_prefix
-  ssh_public_key      = var.ssh_public_key
-  tags                = local.tags
-
-  depends_on = [module.peering_jump]
-}
+#
+# DISABLED for the AGC work (feat/agc-centralindia): the dev spoke and AKS now
+# live in centralindia, and the cluster's API server is public (restricted to
+# aks_authorized_ip_ranges), so kubectl runs from the laptop and this VM's 2
+# vCPU go to the cluster instead. Re-enable together with its references in
+# module "keyvault", module "aks" and outputs.tf, or `terraform validate` fails
+# with "Reference to undeclared module".
+# module "linux_vm_mgmt" {
+#   source = "../../modules/linux-vm"
+#
+#   env                 = local.env
+#   role                = "mgmt"
+#   resource_group_name = module.spoke_network.resource_group_name
+#   location            = local.jump_location
+#   subnet_id           = module.jump_network.subnet_id
+#   enable_public_ip    = true
+#   ssh_source_prefix   = var.mgmt_ssh_source_prefix
+#   ssh_public_key      = var.ssh_public_key
+#   tags                = local.tags
+#
+#   depends_on = [module.peering_jump]
+# }
 
 # ── Global peering: jump VNet ↔ dev spoke (data path to the private AKS API) ──
 # Peering is non-transitive, so jump↔hub alone can't reach the API server's
@@ -219,13 +232,13 @@ module "keyvault" {
   location                  = var.location
   subnet_id                 = module.spoke_network.data_subnet_id
   vault_private_dns_zone_id = local.vault_dns_zone_id
-  # Was the jump VM; that module is commented out, so the mgmt VM is the only
-  # VM left and is the one that needs to read secrets.
-  vm_identity_principal_id = module.linux_vm_mgmt.vm_principal_id
+  # No VM left (mgmt and jump are both commented out), so there is no identity
+  # to grant. Restore module "linux_vm_mgmt", set this back to true and pass
+  # vm_identity_principal_id = module.linux_vm_mgmt.vm_principal_id.
+  grant_vm_identity_access = false
   allowed_ip_rules         = var.allowed_ip_rules
-  # Lets the mgmt VM run `az keyvault certificate import` for the App Gateway
-  # TLS certificate — the vault is private, so that import can only happen from
-  # inside the VNet. See docs/public-endpoint.md.
+  # Only meaningful with a VM identity; moot while grant_vm_identity_access is
+  # false. See docs/public-endpoint.md for the certificate-import flow.
   grant_vm_certificate_officer = var.grant_vm_certificate_officer
 
   # REQUIRED for App Gateway TLS. The gateway reads the certificate from its
@@ -259,17 +272,19 @@ module "aks" {
   # same two roles via additional_admin_principals below, and a second
   # assignment at the same scope fails with RoleAssignmentExists.
   # jump_vm_principal_id  = module.linux_vm.vm_principal_id
-  aks_private_dns_zone_id = local.aks_dns_zone_id
-  pod_cidr                = local.aks_pod_cidr # same value the spoke NSG allows
-  tags                    = local.tags
+  pod_cidr = local.aks_pod_cidr # same value the spoke NSG allows
+  tags     = local.tags
 
-  # The mgmt VM is the bastion replacement, so it needs to actually run kubectl.
-  # Its managed identity is the only usable sign-in there: it has no browser,
-  # and Entra security defaults block `az login --use-device-code`.
-  # The "mgmt_vm" key must stay a literal — see the variable's docs.
-  additional_admin_principals = {
-    mgmt_vm = module.linux_vm_mgmt.vm_principal_id
-  }
+  # PUBLIC API server so kubectl works from the laptop (the private cluster was
+  # only reachable from the mgmt VM). No BYO private DNS zone is used, so
+  # local.aks_dns_zone_id (a southindia zone anyway) is deliberately not passed.
+  # Sign-in is still Entra ID + Azure RBAC; the IP list narrows who can even try.
+  private_cluster_enabled         = false
+  api_server_authorized_ip_ranges = var.aks_authorized_ip_ranges
+
+  # The pipelines use `az aks command invoke`, which does not depend on the
+  # authorized ranges above. The mgmt VM's cluster-admin grant went with it.
+  # additional_admin_principals = { mgmt_vm = module.linux_vm_mgmt.vm_principal_id }
 
   grant_operator_cluster_admin = true # lab: allow kubectl from your workstation
 }
@@ -288,6 +303,12 @@ module "acr" {
   sku                        = var.acr_sku
   kubelet_identity_object_id = module.aks.kubelet_identity
   tags                       = local.tags
+
+  # Empty by default — no geo-replication, registry unchanged. Populate it (and
+  # move acr_sku to "Premium") only if you want the DR region to pull from a
+  # local replica instead of reaching back into southindia. See
+  # dev.auto.tfvars for the switch and the cost note.
+  geo_replication_locations = var.acr_geo_replication_locations
 }
 
 # ── Storage account behind a private endpoint ─────────────────────────────────

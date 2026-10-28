@@ -193,6 +193,29 @@ variable "key_vault_id" {
   }
 }
 
+variable "frontdoor_id" {
+  description = <<-EOT
+    Front Door profile's resource GUID (the `frontdoor_id` attribute of
+    azurerm_cdn_frontdoor_profile — NOT its resource ID and not its name).
+
+    null (default) generates no custom WAF rule, leaving a gateway reachable
+    directly on its own public IP. That is correct for the pre-DR single-gateway
+    setup, where this gateway IS the public entry point.
+
+    Set it once Front Door fronts this gateway. The WAF then blocks any request
+    whose X-Azure-FDID header is missing or does not match — which is what stops
+    a caller skipping Front Door, and its WAF, by hitting the origin IP.
+    Restricting the NSG to the AzureFrontDoor.Backend service tag is NOT
+    sufficient alone: that tag covers every Front Door profile in Azure,
+    including other tenants'.
+
+    ORDER OF OPERATIONS: apply the frontdoor layer first to obtain the GUID,
+    then set this. Setting it before Front Door exists blocks all traffic.
+  EOT
+  type        = string
+  default     = null
+}
+
 variable "tags" {
 
   type    = map(string)

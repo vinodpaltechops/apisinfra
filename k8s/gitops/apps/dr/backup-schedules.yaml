@@ -1,0 +1,37 @@
+# Velero Schedules — DR cluster.
+#
+# Same definitions, offset ~20 minutes from the primary's so the two clusters
+# never upload into the shared storage account simultaneously.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: backup-schedules
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/vinodpaltechops/apisinfra.git
+    targetRevision: main
+    path: k8s/gitops/platform/backup-schedules/overlays/dr
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: velero
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+    retry:
+      limit: 5
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 3m

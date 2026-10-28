@@ -3,9 +3,17 @@ variable "org_name" {
   default = "vinorg"
 }
 
+# centralindia, not southindia: Application Gateway for Containers is not
+# available in southindia, and it must sit in the same VNet (so region) as AKS.
 variable "location" {
   type    = string
-  default = "southindia"
+  default = "centralindia"
+}
+
+variable "aks_authorized_ip_ranges" {
+  description = "CIDRs allowed to reach the public AKS API server — your laptop's egress IP as /32 (curl -s https://api.ipify.org). Empty leaves the endpoint open to the internet (Entra ID + Azure RBAC still apply). Not needed for the pipelines, which use `az aks command invoke`."
+  type        = list(string)
+  default     = []
 }
 
 variable "admin_password" {
@@ -26,9 +34,9 @@ variable "common_tags" {
 }
 
 variable "mgmt_ssh_source_prefix" {
-  description = "CIDR allowed to SSH into the public mgmt VM (your home/ISP public IP, e.g. 163.223.165.0/24). It's your only internet-facing door — keep it tight."
+  description = "Source allowed to SSH into the public mgmt VM: a CIDR (your ISP range) or the NSG service tag \"Internet\". It's the only internet-facing door; key-only auth is what protects it when open."
   type        = string
-  default     = "163.223.165.0/24"
+  default     = "Internet"
 }
 
 variable "keyvault_public_network_access_enabled" {
@@ -50,9 +58,22 @@ variable "acr_name" {
 }
 
 variable "acr_sku" {
-  description = "Basic is enough for this lab. Premium only if you move the registry behind a private endpoint."
+  description = "Basic is enough for this lab. Premium only if you move the registry behind a private endpoint, or geo-replicate it for DR (see acr_geo_replication_locations)."
   type        = string
   default     = "Basic"
+}
+
+variable "acr_geo_replication_locations" {
+  description = <<-EOT
+    Regions to geo-replicate the registry into for DR, e.g. ["indiasouthcentral"].
+    Empty (default) = today's single-region Basic registry, unchanged.
+
+    Requires acr_sku = "Premium" — set both together in dev.auto.tfvars or the
+    apply fails the module's validation. Premium is roughly 10x Basic, which is
+    the real reason this is off by default rather than a technical one.
+  EOT
+  type        = list(string)
+  default     = []
 }
 
 variable "ssh_public_key" {

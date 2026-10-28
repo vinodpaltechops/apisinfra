@@ -3,8 +3,21 @@ variable "env" {
 }
 
 variable "aks_private_dns_zone_id" {
-  description = "Pre-created hub-linked privatelink.<region>.azmk8s.io zone ID (from connectivity) for the private cluster's BYO DNS."
+  description = "Pre-created hub-linked privatelink.<region>.azmk8s.io zone ID (from connectivity) for the private cluster's BYO DNS. Not used, and may be null, when private_cluster_enabled is false."
   type        = string
+  default     = null
+}
+
+variable "private_cluster_enabled" {
+  description = "true = private API server behind a BYO private DNS zone (reachable only from peered VNets). false = public API server, which you should restrict with api_server_authorized_ip_ranges."
+  type        = bool
+  default     = true
+}
+
+variable "api_server_authorized_ip_ranges" {
+  description = "CIDRs allowed to reach a PUBLIC API server (your laptop's egress IP, e.g. [\"203.0.113.7/32\"]). Ignored for a private cluster. Empty on a public cluster leaves the endpoint open to the internet, protected only by Entra ID + Azure RBAC. `az aks command invoke` (used by the pipelines) is not affected by this list."
+  type        = list(string)
+  default     = []
 }
 
 variable "spoke_vnet_id" {

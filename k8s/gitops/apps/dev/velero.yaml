@@ -1,0 +1,104 @@
+# Velero — PRIMARY cluster.
+#
+# An ApplicationSet, not an Application, so the Azure identifiers can come from
+# Terraform instead of being typed into Git. The cluster generator reads the
+# annotations that argocd-bootstrap writes onto this cluster's Argo CD secret
+# (from the velero layer's outputs) and renders them into the chart's values.
+# It yields exactly one Application, named `velero`.
+#
+# Sync wave -1 so this settles BEFORE the backup schedules (wave 0) that create
+# Schedule CRs. Applying a Schedule before Velero's CRDs exist fails the sync
+# with "no matches for kind Schedule", which then needs a manual retry.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: velero
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  goTemplate: true
+  # A missing annotation fails the render instead of producing an empty string:
+  # an empty storageAccount installs clean and every backup then fails.
+  goTemplateOptions: ["missingkey=error"]
+
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            gitops.vinorg/cluster: dev
+
+  template:
+    metadata:
+      name: velero
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: default
+
+      sources:
+        - repoURL: https://vmware-tanzu.github.io/helm-charts
+          chart: velero
+          # Pinned. An unpinned chart is how the two clusters end up on different
+          # Velero versions — and a backup written by a newer Kopia repository
+          # format is not necessarily readable by an older one, which breaks the
+          # cross-region restore this whole design rests on.
+          targetRevision: 8.2.0
+          helm:
+            releaseName: velero
+            valueFiles:
+              - $values/k8s/gitops/platform/velero/values-dev.yaml
+            # Applied over the values file. The storage location is the WHOLE
+            # list here because Helm replaces lists rather than merging them.
+            valuesObject:
+              serviceAccount:
+                server:
+                  annotations:
+                    # CLIENT id, not principal id — the wrong one fails token
+                    # exchange with AADSTS700016.
+                    azure.workload.identity/client-id: '{{ .metadata.annotations.veleroClientId }}'
+              configuration:
+                backupStorageLocation:
+                  - name: default
+                    provider: azure
+                    # Container name from the velero layer's `container_name`.
+                    bucket: velero
+                    # The two clusters share one container; this prefix keeps
+                    # them apart. It MUST differ from the DR cluster's ("dr/") —
+                    # identical prefixes let two Velero instances believe they
+                    # own the same Kopia repository and prune each other's
+                    # backups as expired.
+                    prefix: primary/
+                    default: true
+                    config:
+                      resourceGroup: '{{ .metadata.annotations.veleroResourceGroup }}' # holds the STORAGE ACCOUNT, not the cluster
+                      storageAccount: '{{ .metadata.annotations.veleroStorageAccount }}'
+                      subscriptionId: '{{ .metadata.annotations.veleroSubscriptionId }}'
+                      # Entra auth: the account has shared_access_key_enabled =
+                      # false, so there is no key to fall back on.
+                      useAAD: "true"
+        - repoURL: https://github.com/vinodpaltechops/apisinfra.git
+          targetRevision: main
+          ref: values
+
+      destination:
+        server: https://kubernetes.default.svc
+        # MUST be "velero" — it forms half the federated credential subject
+        # (system:serviceaccount:velero:velero). Changing it silently breaks auth.
+        namespace: velero
+
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          # Velero's CRDs are large enough to exceed the 256KB annotation that
+          # client-side apply uses for last-applied-configuration.
+          - ServerSideApply=true
+        retry:
+          limit: 3
+          backoff:
+            duration: 20s
+            factor: 2
+            maxDuration: 3m

@@ -1,0 +1,39 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: content-hub
+
+resources:
+- ../../base
+
+# ── Image tags: identical to the dev overlay, and that is the point ───────────
+# Both overlays pin the SAME registry and the SAME tag, because both clusters
+# must run the same build. app-deploy bumps both files in one commit; letting
+# them drift means failing over to a version that was never the live one.
+#
+# The registry is the primary region's ACR. That is a cross-region dependency
+# during a failover — the DR cluster keeps running images already pulled onto
+# its nodes, but a scale-out or a pod reschedule needs the registry to be up.
+# Closing that gap is acr_geo_replication_locations in the dev landing zone
+# (Premium SKU); the login server name does not change when you enable it, so
+# nothing here needs editing.
+images:
+- name: backend
+  newName: acrdevvinorg001.azurecr.io/content-hub/backend
+  newTag: faef27cec67e9ea25990b836c8c74140ae51b632
+- name: content-api
+  newName: acrdevvinorg001.azurecr.io/content-hub/content-api
+  newTag: faef27cec67e9ea25990b836c8c74140ae51b632
+- name: frontend
+  newName: acrdevvinorg001.azurecr.io/content-hub/frontend
+  newTag: faef27cec67e9ea25990b836c8c74140ae51b632
+
+  # Same reasoning as the dev overlay: IfNotPresent would let a stale
+  # node-cached layer win if a tag were ever reused.
+patches:
+- patch: |
+    - op: replace
+      path: /spec/template/spec/containers/0/imagePullPolicy
+      value: Always
+  target:
+    kind: Deployment

@@ -37,6 +37,29 @@ resource "azurerm_container_registry" "this" {
   # this is the switch you flip together with the SKU.
   public_network_access_enabled = var.sku == "Premium" ? var.public_network_access_enabled : true
 
+  # ── DR: geo-replication ─────────────────────────────────────────────────────
+  # Empty by default, so this block generates NOTHING and the registry is byte
+  # identical to before the DR work. Populating it requires sku = "Premium".
+  #
+  # Why it matters for DR: a Basic registry lives in ONE region. A DR cluster
+  # pointed at it can start images already cached on its nodes, but the moment
+  # it needs to pull — a scale-out, a node replacement, a rescheduled pod — it
+  # is reaching into the region you are failing away from. That turns the
+  # registry into a single point of failure sitting directly on the recovery
+  # path, which is the one place it must not be.
+  #
+  # Geo-replication keeps the login server name identical in every region and
+  # routes each pull to the nearest replica automatically, so no manifest,
+  # overlay or pipeline changes region.
+  dynamic "georeplications" {
+    for_each = toset(var.geo_replication_locations)
+    content {
+      location                = georeplications.value
+      zone_redundancy_enabled = false # not available in every region; opt in per region if yours supports it
+      tags                    = var.tags
+    }
+  }
+
   tags = var.tags
 }
 

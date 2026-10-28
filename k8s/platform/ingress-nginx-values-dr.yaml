@@ -1,0 +1,73 @@
+# Helm values for ingress-nginx in the DR cluster (aks-dr-lab-001).
+#
+# Identical to ingress-nginx-values.yaml except for the three region-specific
+# values marked below. Kept as a separate file rather than a kustomize patch
+# because Helm values are not kustomize-patchable — Argo CD's multi-source
+# Application points each cluster's Application at its own file.
+#
+# KEEP THE TWO FILES IN STEP. A setting tuned in the dev file and forgotten here
+# produces a DR cluster that behaves subtly differently from the one it is
+# standing in for — and you find out during a failover.
+
+controller:
+  ingressClassResource:
+    name: nginx-internal
+    enabled: true
+    default: false
+    controllerValue: "k8s.io/ingress-nginx-internal"
+  ingressClass: nginx-internal
+
+  # One replica, same reasoning as the primary: the chart auto-creates a
+  # PodDisruptionBudget above 1, and a PDB on a single-node pool makes that node
+  # undrainable — blocking node-pool deletion and AKS upgrades alike.
+  replicaCount: 1
+
+  service:
+    annotations:
+      service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+      # DIFFERENT FROM DEV — this cluster's user subnet.
+      service.beta.kubernetes.io/azure-load-balancer-internal-subnet: "snet-aks-user-dr"
+      # DIFFERENT FROM DEV — static VIP in the DR spoke (10.5.2.0/24). The DR
+      # App Gateway's backend pool points at this literal address, so it must
+      # survive the Service being recreated. Keep in sync with
+      # ingress_internal_ip in infra/landing-zones/dr/main.tf.
+      service.beta.kubernetes.io/azure-load-balancer-ipv4: "10.5.2.250"
+    externalTrafficPolicy: Local
+
+  nodeSelector:
+    nodepool-type: user
+
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            topologyKey: kubernetes.io/hostname
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: ingress-nginx
+                app.kubernetes.io/component: controller
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 384Mi
+
+  config:
+    use-forwarded-headers: "true"
+    proxy-body-size: "1m"
+    server-tokens: "false"
+
+  metrics:
+    enabled: false
+
+  admissionWebhooks:
+    enabled: true
+    patch:
+      nodeSelector:
+        nodepool-type: user
+
+defaultBackend:
+  enabled: false

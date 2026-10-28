@@ -13,10 +13,10 @@ terraform {
   }
 
   backend "azurerm" {
-    resource_group_name  = "rg-tfstate-vinorg-001"
-    storage_account_name = "stotfstatevinorg001"
-    container_name       = "management-groups"
-    key                  = "management-groups.tfstate"
+    # resource_group_name + storage_account_name come from infra/backend.json:
+    #   terraform init -backend-config=../../backend.json
+    container_name = "management-groups"
+    key            = "management-groups.tfstate"
   }
 }
 
@@ -83,9 +83,27 @@ resource "azurerm_management_group" "landing_zones" {
 # Subscriptions must already exist — Terraform doesn't create subscriptions
 # in most enterprise setups (EA/MCA billing creates them).
 
+data "azurerm_client_config" "current" {}
+
+# This stack deploys every layer into ONE subscription: the one Terraform is
+# authenticated against (ARM_SUBSCRIPTION_ID, or the active az CLI session).
+# So that is the default here rather than a hardcoded id — a written-down id
+# goes stale the moment you move subscriptions, and the failure is confusing:
+# ARM reports "not found in the current tenant" because the OLD subscription
+# lives in a different tenant, not because anything is wrong with the MG.
+#
+# var.subscription_ids still wins where it is set, which is what a real
+# multi-subscription landing zone needs.
+locals {
+  subscription_ids = merge(
+    { landing_zones = data.azurerm_client_config.current.subscription_id },
+    var.subscription_ids,
+  )
+}
+
 resource "azurerm_management_group_subscription_association" "landing_zones" {
   management_group_id = azurerm_management_group.landing_zones.id
-  subscription_id     = "/subscriptions/${var.subscription_ids["landing_zones"]}"
+  subscription_id     = "/subscriptions/${local.subscription_ids["landing_zones"]}"
 
   # lifecycle {
   #   prevent_destroy = true
@@ -94,25 +112,25 @@ resource "azurerm_management_group_subscription_association" "landing_zones" {
 
 # resource "azurerm_management_group_subscription_association" "connectivity" {
 #   management_group_id = azurerm_management_group.connectivity.id
-#   subscription_id     = "/subscriptions/${var.subscription_ids["connectivity"]}"
+#   subscription_id     = "/subscriptions/${local.subscription_ids["connectivity"]}"
 # }
 
 # resource "azurerm_management_group_subscription_association" "identity" {
 #   management_group_id = azurerm_management_group.identity.id
-#   subscription_id     = "/subscriptions/${var.subscription_ids["identity"]}"
+#   subscription_id     = "/subscriptions/${local.subscription_ids["identity"]}"
 # }
 
 # resource "azurerm_management_group_subscription_association" "dev" {
 #   management_group_id = azurerm_management_group.corp.id
-#   subscription_id     = "/subscriptions/${var.subscription_ids["dev"]}"
+#   subscription_id     = "/subscriptions/${local.subscription_ids["dev"]}"
 # }
 
 # resource "azurerm_management_group_subscription_association" "qa" {
 #   management_group_id = azurerm_management_group.corp.id
-#   subscription_id     = "/subscriptions/${var.subscription_ids["qa"]}"
+#   subscription_id     = "/subscriptions/${local.subscription_ids["qa"]}"
 # }
 
 # resource "azurerm_management_group_subscription_association" "prod" {
 #   management_group_id = azurerm_management_group.corp.id
-#   subscription_id     = "/subscriptions/${var.subscription_ids["prod"]}"
+#   subscription_id     = "/subscriptions/${local.subscription_ids["prod"]}"
 # }

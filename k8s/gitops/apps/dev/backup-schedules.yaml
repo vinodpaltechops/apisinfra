@@ -1,0 +1,45 @@
+# Velero Schedules — PRIMARY cluster.
+#
+# Sync wave 0, after velero (wave -1). Schedule is a Velero CRD, so it cannot
+# be applied until the Velero chart has created that CRD.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: backup-schedules
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/vinodpaltechops/apisinfra.git
+    targetRevision: main
+    # base/, not the directory above it — the DR overlay lives in a sibling
+    # overlays/ directory, and kustomize refuses a base that contains its own
+    # overlay ("cycle detected").
+    path: k8s/gitops/platform/backup-schedules/base
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: velero
+
+  syncPolicy:
+    automated:
+      prune: true
+      # selfHeal matters more here than anywhere else: a Schedule paused by hand
+      # during an incident, and then forgotten, is a backup system that has
+      # silently stopped. Argo CD un-pauses it within the reconcile interval.
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false # velero's Application owns this namespace
+    retry:
+      # The Velero CRDs may still be registering when this first syncs, even
+      # behind the sync wave — CRD establishment is asynchronous.
+      limit: 5
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 3m

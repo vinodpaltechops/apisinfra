@@ -16,10 +16,10 @@ terraform {
     }
   }
   backend "azurerm" {
-    resource_group_name  = "rg-tfstate-vinorg-001"
-    storage_account_name = "stotfstatevinorg001"
-    container_name       = "policies"
-    key                  = "policies.tfstate"
+    # resource_group_name + storage_account_name come from infra/backend.json:
+    #   terraform init -backend-config=../../backend.json
+    container_name = "policies"
+    key            = "policies.tfstate"
   }
 }
 
@@ -28,16 +28,20 @@ provider "azurerm" {
   # Subscription comes from the active Azure CLI session (az account show).
 }
 
+# State storage account + resource group. Same file `terraform init` reads via
+# -backend-config, so the name lives in exactly one place.
+locals {
+  tfstate_backend = jsondecode(file("${path.module}/../../backend.json"))
+}
+
 # Management group IDs come from the management-groups layer (single source of
 # truth) — no hardcoded, tenant-specific IDs to go stale.
 data "terraform_remote_state" "management_groups" {
   backend = "azurerm"
-  config = {
-    resource_group_name  = "rg-tfstate-vinorg-001"
-    storage_account_name = "stotfstatevinorg001"
-    container_name       = "management-groups"
-    key                  = "management-groups.tfstate"
-  }
+  config = merge(local.tfstate_backend, {
+    container_name = "management-groups"
+    key            = "management-groups.tfstate"
+  })
 }
 
 locals {

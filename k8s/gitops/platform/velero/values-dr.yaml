@@ -1,0 +1,80 @@
+# Velero — DR cluster (aks-dr-lab-001).
+#
+# Same backup store, same identity, same everything except TWO settings:
+#
+#   prefix              dr/  — keeps this cluster's Kopia repository separate
+#   backupStorageLocation
+#     accessMode        ReadOnly (see below)
+#
+# Read k8s/gitops/platform/velero/values-dev.yaml first — the reasoning for
+# filesystem backup over snapshots, and for workload identity, is there and is
+# not repeated.
+
+credentials:
+  useSecret: false
+
+serviceAccount:
+  server:
+    create: true
+    name: velero
+    # The client-id annotation is NOT here: it comes from the velero Terraform
+    # layer and is injected by the ApplicationSet in k8s/gitops/apps/<cluster>/
+    # velero.yaml (valuesObject), together with the backup storage location.
+
+podLabels:
+  azure.workload.identity/use: "true"
+
+initContainers:
+  - name: velero-plugin-for-microsoft-azure
+    image: velero/velero-plugin-for-microsoft-azure:v1.11.1
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+      - mountPath: /target
+        name: plugins
+
+configuration:
+  # backupStorageLocation is NOT here. It names the resource group, storage
+  # account and subscription from the velero Terraform layer, so the
+  # ApplicationSet in k8s/gitops/apps/<cluster>/velero.yaml supplies the whole
+  # list. Helm replaces a list wholesale rather than merging it, so it cannot be
+  # split between this file and the ApplicationSet.
+
+  # Explicitly EMPTY — see values-dev.yaml. Omitting this key renders a
+  # VolumeSnapshotLocation with an empty `provider`, because the chart's default
+  # is a one-element list rather than an empty one.
+  volumeSnapshotLocation: []
+
+  defaultVolumesToFsBackup: true
+  defaultBackupTTL: 720h
+
+deployNodeAgent: true
+
+nodeAgent:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+      effect: NoSchedule
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+nodeSelector:
+  nodepool-type: user
+
+upgradeCRDs: false
+cleanUpCRDs: false
+
+metrics:
+  enabled: false
+  serviceMonitor:
+    enabled: false

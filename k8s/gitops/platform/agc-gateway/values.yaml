@@ -1,0 +1,29 @@
+# Every Azure identifier below comes from the agc Terraform layer, injected by
+# the agc-gateway ApplicationSet from the in-cluster Argo CD secret's
+# annotations. The empty strings are deliberate: they make `helm template`
+# render, and the `required` calls in the templates fail loudly if the
+# ApplicationSet forgot to fill one in.
+
+# Resource ID of the AGC (output agc_id). Goes in the Gateway annotation.
+albId: ""
+# Name of the AGC frontend (output frontend_name).
+frontendName: ""
+# Source range of the gateway's traffic (output agc_subnet_cidr) — what the
+# NetworkPolicy lets through to the pods. AGC's data plane is not a pod, so a
+# podSelector/namespaceSelector can never describe it.
+subnetCidr: ""
+
+# Host the HTTPRoute answers for. Empty = any host, so the route can be tested
+# straight against the AGC frontend FQDN before DNS is switched. Set it to the
+# real name (app.sometestdemo.in) once DNS points here.
+hostnames: []
+
+frontend:
+  service: frontend
+  port: 8080
+backend:
+  service: backend
+  port: 8000
+
+# Same paths the pods already serve for their own probes.
+healthPath: /healthz

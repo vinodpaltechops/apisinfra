@@ -1,5 +1,5 @@
 #cloud-config
-# Installs az CLI, kubectl, helm and kubelogin on first boot.
+# Installs az CLI, kubectl, helm, velero and kubelogin on first boot.
 #
 # Everything runs as ONE script rather than a list of runcmd entries, because
 # the Azure CLI installer shells out to apt-get and used to race
@@ -76,6 +76,27 @@ write_files:
         'curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash' \
         || echo "ERROR: helm install failed"
 
+      # ── velero CLI ───────────────────────────────────────────────────────────
+      # This VM is the DR operations box: it is the only place holding cluster
+      # admin on BOTH clusters, so every restore in docs/disaster-recovery.md is
+      # meant to be run from here. Without the binary those runbooks stop at
+      # "velero: command not found" — during an incident, which is the worst
+      # possible time to be installing tooling.
+      #
+      # Pinned to match the Velero SERVER version deployed by the Helm chart
+      # (k8s/gitops/apps/*/velero.yaml pins chart 8.2.0 = appVersion 1.15.1).
+      # Keep the two in step: a client materially newer or older than the server
+      # can misread backup metadata, and this client's whole job is reading
+      # backups written by that server.
+      VELERO_VERSION=v1.15.1
+      retry 3 curl -fLo /tmp/velero.tgz \
+        "https://github.com/vmware-tanzu/velero/releases/download/${VELERO_VERSION}/velero-${VELERO_VERSION}-linux-amd64.tar.gz" \
+        && tar -xzf /tmp/velero.tgz -C /tmp \
+        && install -o root -g root -m 0755 \
+             "/tmp/velero-${VELERO_VERSION}-linux-amd64/velero" /usr/local/bin/velero \
+        && rm -rf /tmp/velero.tgz "/tmp/velero-${VELERO_VERSION}-linux-amd64" \
+        || echo "ERROR: velero install failed"
+
       # ── kubelogin — needs az on PATH, so it must come last ───────────────────
       if command -v az >/dev/null 2>&1; then
         retry 3 az aks install-cli || echo "ERROR: kubelogin install failed"
@@ -85,7 +106,7 @@ write_files:
 
       # ── Report ───────────────────────────────────────────────────────────────
       missing=0
-      for t in az kubectl helm kubelogin; do
+      for t in az kubectl helm kubelogin velero; do
         if command -v "$t" >/dev/null 2>&1; then
           echo "OK      $t -> $(command -v "$t")"
         else

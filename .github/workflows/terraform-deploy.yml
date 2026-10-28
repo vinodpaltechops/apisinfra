@@ -20,7 +20,13 @@ name: terraform-deploy
 
 on:
   push:
-    branches: [main]
+    # dev: the AGC work is merged here first and validated from here before it
+    # goes to main. Remove it (back to [main]) once that is done.
+    # Needs a federated credential on the Azure app registration for the subject
+    #   repo:vinodpaltechops/apisinfra:ref:refs/heads/dev
+    # (scripts/setup-azure-oidc.sh adds it). Without it the OIDC login fails on
+    # every layer, starting with the first.
+    branches: [main, dev]
     paths:
       - "infra/**"
       - ".github/workflows/**"
@@ -84,3 +90,147 @@ jobs:
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/platform/appgw, apply: true }
     secrets: inherit
+
+  # 5b) Application Gateway for Containers — the Gateway API entry point, in
+  #     the dev spoke. Reads dev's state (spoke VNet, AKS OIDC issuer), so unlike
+  #     appgw it must follow dev. It runs alongside appgw: nothing is routed
+  #     through it until DNS points at its frontend, and the cluster half (ALB
+  #     Controller + Gateway) is deployed by Argo CD, not here.
+  #     Needs the `agc` state container — re-apply bootstrap once first.
+  agc:
+    needs: dev
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/agc, apply: true }
+    secrets: inherit
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # DR LAYERS — comment out this whole block to return to the single-region
+  # stack. Nothing above depends on anything below, so removing them is safe at
+  # any time (destroy them first if they are already deployed).
+  #
+  # QUOTA: the `dr` job creates a 2-node AKS cluster (4 vCPU) in dr_location =
+  # indiasouthcentral, whose default limit is 4 and which nothing else uses. It
+  # fits with NO quota request — that is why this region was chosen over
+  # centralindia, where the jump and mgmt VMs already consume all 4.
+  #
+  # There is no headroom, though. A node-pool rotation or node-image upgrade
+  # needs a temporary surge of +2 vCPU and will fail at 4/4; raise the limit to
+  # 6 before attempting either.
+  #   az vm list-usage --location indiasouthcentral -o table
+  #
+  # POLICY: indiasouthcentral must be in allowed_locations
+  # (infra/platform/policies) — that assignment is a DENY at the org root, so
+  # every resource below is rejected without it. The pipeline already applies
+  # policies (job 2) before this block.
+  #
+  # STATE CONTAINERS — do this FIRST, once, by hand. Each layer below uses a new
+  # backend container (landing-zones-dr, velero, appgw-dr, frontdoor). The
+  # azurerm backend does not create its container; it fails at `terraform init`
+  # with "container does not exist". They are declared in
+  # infra/platform/bootstrap, which is deliberately NOT part of this pipeline
+  # because it owns the backend the pipeline itself uses:
+  #
+  #   terraform -chdir=infra/platform/bootstrap init
+  #   terraform -chdir=infra/platform/bootstrap apply
+  #
+  # Additive and safe to re-run — prevent_destroy guards the existing
+  # containers, and no state file is touched.
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  # 6) DR landing zone — spoke + private AKS in the second region.
+  #    Needs dev applied: it reads dev's state for the mgmt VM identity, the
+  #    shared ACR and the jump VNet.
+  dr:
+    needs: dev
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/landing-zones/dr, apply: true }
+    secrets: inherit
+
+  # 7) Velero backup store — federates BOTH clusters' OIDC issuers, so it needs
+  #    both landing zones applied. Creates no Kubernetes objects; the Velero
+  #    install itself is GitOps (k8s/gitops/platform/velero).
+  #
+  #    NOTE: this layer holds the backups. Adding it here is safe, but never add
+  #    it to terraform-destroy without meaning it.
+  velero:
+    needs: dr
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/velero, apply: true }
+    secrets: inherit
+
+  # 8) DR Application Gateway — the second region's origin.
+  appgw-dr:
+    needs: dr
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/appgw-dr, apply: true }
+    secrets: inherit
+
+  # 9) Traffic Manager — the global entry point ACTUALLY IN USE, standing in
+  #    for Front Door (job 10), which this subscription tier forbids.
+  #
+  #    DNS-based failover rather than a proxy: it answers with the healthy
+  #    region's gateway IP and is then out of the path. Slower and coarser than
+  #    Front Door — see the long note in infra/modules/trafficmanager — but it
+  #    is the difference between automatic failover and editing a DNS record
+  #    during an incident.
+  #
+  #    Inert until app.<domain> becomes a CNAME to *.trafficmanager.net:
+  #      terraform -chdir=infra/platform/trafficmanager output dns_records
+  #
+  #    NEVER run this and job 10 at the same time. Two systems owning the same
+  #    hostname's failover is how a failover ends up pointing at a dead region.
+  trafficmanager:
+    needs: [appgw, appgw-dr]
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/trafficmanager, apply: true }
+    secrets: inherit
+
+  # 9b) Azure DNS — the public zone and the app CNAME to Traffic Manager.
+  #
+  #    Creating the zone changes nothing for users: the internet keeps asking
+  #    GoDaddy until the nameservers are switched at the registrar by hand.
+  #      terraform -chdir=infra/platform/dns output delegation
+  dns:
+    needs: trafficmanager
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/dns, apply: true }
+    secrets: inherit
+
+  # 10) Front Door — DISABLED: not available on this subscription.
+  #
+  #    Azure refuses Front Door on Free Trial and Student subscriptions:
+  #      Code="BadRequest" Message="Free Trial and Student account is forbidden
+  #      for Azure Frontdoor resources."
+  #    Confirm with:
+  #      az rest --method get --url \
+  #        "https://management.azure.com/subscriptions/<sub>?api-version=2020-01-01" \
+  #        --query subscriptionPolicies.quotaId      # -> FreeTrial_2014-09-01
+  #
+  #    This is a subscription restriction, not a configuration error — no
+  #    Terraform change gets past it. The layer, module and tfvars are all kept
+  #    intact and correct; only this job is commented out.
+  #
+  #    WITHOUT Front Door there is no automatic failover. Both App Gateways are
+  #    reachable on their own public IPs, and failover is tested by moving the
+  #    DNS A record between them by hand — see "Manual failover" in
+  #    docs/disaster-recovery.md. That still exercises everything that actually
+  #    matters for DR: the second region, its cluster, its gateway, and Velero
+  #    restoring across regions.
+  #
+  #    TO RE-ENABLE, after upgrading to Pay-As-You-Go — all four together:
+  #      1. uncomment this job
+  #      2. appgw-dr.auto.tfvars:  allowed_source_prefixes back to
+  #                               ["AzureFrontDoor.Backend"]
+  #      3. apply, then set frontdoor_id in BOTH gateway tfvars and re-apply
+  #      4. DNS: replace the A record with the CNAME from `terraform output
+  #         dns_records`
+  #
+  #    NOTE: rg-frontdoor-vinorg-001 already exists — the layer got as far as the
+  #    resource group before the profile was refused. It is empty and costs
+  #    nothing; re-enabling picks up from there.
+  #
+  # frontdoor:
+  #   needs: [appgw, appgw-dr]
+  #   uses: ./.github/workflows/tf-layer.yml
+  #   with: { layer_path: infra/platform/frontdoor, apply: true }
+  #   secrets: inherit

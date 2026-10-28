@@ -31,7 +31,7 @@ layer when you are not using it.
 
   ```bash
   az storage container create --name appgw \
-    --account-name stotfstatevinorg001 --auth-mode login
+    --account-name stotfstatevinorg003 --auth-mode login
   ```
 
 ## Step 1 — Set your hostname
@@ -76,7 +76,7 @@ Run the **`terraform-deploy`** workflow (the `appgw` layer runs last), or:
 
 ```bash
 cd infra/platform/appgw
-terraform init
+terraform init -backend-config=../../backend.json
 terraform apply
 ```
 

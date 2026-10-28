@@ -1,0 +1,107 @@
+# Velero Schedules — what actually gets backed up, and how often.
+#
+# These are plain CRs, so they are kustomize-patchable (unlike Helm values) —
+# which is how the DR overlay changes the schedule times without duplicating
+# the definitions.
+#
+# ── What "backed up" means here ───────────────────────────────────────────────
+# Two different things travel in a Velero backup, and they have very different
+# value in this stack:
+#
+#   Kubernetes objects  — Deployments, Services, Ingresses, ConfigMaps...
+#     Already in Git, already reconciled by Argo CD into BOTH clusters. Backing
+#     them up is near-worthless for DR, because the DR cluster reconstructs them
+#     from the repo in seconds. It IS worth something for the accident case:
+#     "someone deleted the namespace and the last good state is not the last
+#     commit".
+#
+#   Volume data        — PersistentVolume contents
+#     NOT in Git and reconstructible from nowhere. This is the entire reason
+#     Velero exists in a GitOps stack. Everything below is arranged around it.
+#
+# The Content Hub app is currently stateless — three services, no PVCs. That
+# makes these schedules cheap today and, more importantly, means the restore
+# path is proven BEFORE the first stateful component arrives rather than after.
+
+---
+# ── Hourly: the application namespace ─────────────────────────────────────────
+# Short TTL, high frequency. This is the "undo an operational mistake" backup:
+# recent, granular, and not kept long enough to accumulate cost.
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: hourly-content-hub
+  namespace: velero
+spec:
+  # 17 past the hour, not 0. Every cron-driven system in the world fires on the
+  # hour; offsetting spreads the load on the storage account and makes this
+  # backup's timing distinguishable in logs.
+  schedule: "17 * * * *"
+
+  # Skip a run rather than queue it if the previous one is still going. A
+  # backlog of overlapping Kopia uploads on a 2 vCPU node is how a backup
+  # system becomes the outage.
+  skipImmediately: false
+
+  template:
+    includedNamespaces:
+      - content-hub
+
+    # 48h. Long enough to cover a weekend's mistakes, short enough that 48
+    # hourly backups never accumulate into real storage cost.
+    ttl: 48h
+
+    # Volume data via Kopia. Redundant while the app is stateless; correct the
+    # moment it is not, and costs nothing in the meantime.
+    defaultVolumesToFsBackup: true
+
+    # Cluster-scoped resources (CRDs, ClusterRoles) are excluded from a
+    # namespace backup by default and that is right here — they belong to the
+    # platform backup below, not to the app.
+    includeClusterResources: false
+
+    storageLocation: default
+
+---
+# ── Daily: the whole cluster, minus the noise ─────────────────────────────────
+# The "rebuild this cluster" backup. Longer TTL, full scope.
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: daily-full
+  namespace: velero
+spec:
+  # 02:40 UTC ≈ 08:10 IST. Off-peak for these regions, and offset from the hour
+  # for the same reason as above.
+  schedule: "40 2 * * *"
+
+  template:
+    # Everything EXCEPT the namespaces that either cannot or should not be
+    # restored from a backup.
+    excludedNamespaces:
+      # Cluster-specific and rebuilt by AKS itself. Restoring kube-system over a
+      # live cluster is a reliable way to break it — the objects reference node
+      # names, IPs and CA data that differ between clusters.
+      - kube-system
+      - gatekeeper-system
+      # Velero's own namespace. A backup containing the backup system's state,
+      # restored by that same system, is a circular dependency with no upside.
+      - velero
+      # Argo CD reconstructs itself from Git; its live state is derived, not
+      # authoritative. Restoring stale Application objects over a healthy Argo CD
+      # would make it fight the repo.
+      - argocd
+
+    # 30 days. MUST stay under backup_soft_delete_days in
+    # infra/platform/velero — that soft-delete window is the safety net for a
+    # backup deleted at expiry that turns out to have been needed.
+    ttl: 720h
+
+    defaultVolumesToFsBackup: true
+
+    # Unlike the hourly, this one DOES take cluster-scoped objects — CRDs,
+    # ClusterRoles, StorageClasses. That is what makes it a cluster rebuild
+    # rather than a namespace restore.
+    includeClusterResources: true
+
+    storageLocation: default
