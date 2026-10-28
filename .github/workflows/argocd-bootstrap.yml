@@ -38,9 +38,6 @@ env:
   ARGOCD_NAMESPACE: argocd
   # The velero layer holds the identity client id these clusters need.
   VELERO_LAYER: infra/platform/velero
-  # The agc layer holds the gateway ids and the ALB Controller's identity (dev
-  # only — the DR cluster has no Application Gateway for Containers).
-  AGC_LAYER: infra/platform/agc
 
 jobs:
   bootstrap:
@@ -138,18 +135,6 @@ jobs:
           terraform -chdir="$VELERO_LAYER" init -input=false -backend-config=../../backend.json >/dev/null
           out() { terraform -chdir="$VELERO_LAYER" output -raw "$1"; }
 
-          # AGC settings, dev cluster only. Same fail-loud rule as above: an
-          # unapplied agc layer stops the run here instead of installing an ALB
-          # Controller with an empty client id. The DR cluster gets none, and its
-          # ApplicationSets (there are none for AGC) would not select it anyway.
-          AGC_ANNOTATIONS=""
-          if [ "${{ inputs.cluster }}" = "dev" ]; then
-            terraform -chdir="$AGC_LAYER" init -input=false -backend-config=../../backend.json >/dev/null
-            agc() { terraform -chdir="$AGC_LAYER" output -raw "$1"; }
-            AGC_ANNOTATIONS="$(printf '    albClientId: "%s"\n    agcId: "%s"\n    agcFrontendName: "%s"\n    agcSubnetCidr: "%s"' \
-              "$(agc alb_identity_client_id)" "$(agc agc_id)" "$(agc frontend_name)" "$(agc agc_subnet_cidr)")"
-          fi
-
           cat > cluster-secret.yaml <<YAML
           apiVersion: v1
           kind: Secret
@@ -164,7 +149,6 @@ jobs:
               veleroStorageAccount: "$(out storage_account_name)"
               veleroSubscriptionId: "$(out subscription_id)"
               veleroClientId: "$(out identity_client_id)"
-          ${AGC_ANNOTATIONS}
           stringData:
             name: in-cluster
             server: https://kubernetes.default.svc
@@ -173,7 +157,7 @@ jobs:
 
           # Nothing secret in it, but print what was resolved: this is the one
           # place to see what Velero will be configured with.
-          grep -A8 'annotations:' cluster-secret.yaml
+          grep -A4 'annotations:' cluster-secret.yaml
 
           az aks command invoke \
             --resource-group "$AKS_RESOURCE_GROUP" \
@@ -256,19 +240,6 @@ jobs:
             --command "kubectl apply -f root-app.yaml" \
             --file root-app.yaml
 
-      # Second root Application: the AGC pieces, read from the feature branch
-      # (root-dev above only sees `main`). Dev cluster only. Remove this step
-      # when the branch is merged — see the header of root-app-agc-dev.yaml.
-      - name: Apply AGC root Application
-        if: ${{ !inputs.uninstall && inputs.cluster == 'dev' }}
-        run: |
-          cp k8s/gitops/bootstrap/root-app-agc-dev.yaml ./root-app-agc.yaml
-          az aks command invoke \
-            --resource-group "$AKS_RESOURCE_GROUP" \
-            --name "$AKS_CLUSTER_NAME" \
-            --command "kubectl apply -f root-app-agc.yaml" \
-            --file root-app-agc.yaml
-
       - name: Report state
         if: ${{ !inputs.uninstall }}
         run: |
@@ -284,14 +255,17 @@ jobs:
         if: ${{ !inputs.uninstall }}
         run: |
           cat <<'EOF'
-          Argo CD is ClusterIP only. The dev cluster's API server is public and
-          restricted to aks_authorized_ip_ranges, so port-forward from your laptop:
+          Argo CD is ClusterIP only — the cluster is private and its ingress is
+          internal. Reach it from the mgmt VM:
 
+            ssh azureadmin@<mgmt_vm_public_ip>
+            az login --identity
             az aks get-credentials -g $AKS_RESOURCE_GROUP -n $AKS_CLUSTER_NAME --overwrite-existing
             kubectl -n argocd port-forward svc/argocd-server 8080:80
-            open http://localhost:8080
 
-          (The DR cluster is still private: use `az aks command invoke`.)
+          Then from your laptop, tunnelling through the same VM:
+            ssh -L 8080:localhost:8080 azureadmin@<mgmt_vm_public_ip>
+            open http://localhost:8080
 
           Initial admin password:
             kubectl -n argocd get secret argocd-initial-admin-secret \

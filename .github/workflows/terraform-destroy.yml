@@ -44,7 +44,7 @@ jobs:
   # DR LAYERS — destroyed FIRST, in reverse of the deploy order.
   #
   # TO REMOVE DR: comment out this block AND change the `dev` job below from
-  #   needs: [appgw, dr, agc]   back to   needs: [appgw, agc]
+  #   needs: [appgw, dr]   back to   needs: appgw
   # That is the only other reference to these jobs. Leaving it pointing at a
   # commented-out job makes the whole workflow fail to parse.
   #
@@ -130,15 +130,6 @@ jobs:
     with: { layer_path: infra/platform/appgw, destroy: true }
     secrets: inherit
 
-  # 1c) Application Gateway for Containers — holds a delegated subnet inside the
-  #     dev spoke VNet, which the landing zone cannot delete while it is in use,
-  #     and reads dev's state for plan. Same position as appgw.
-  agc:
-    needs: trafficmanager
-    uses: ./.github/workflows/tf-layer.yml
-    with: { layer_path: infra/platform/agc, destroy: true }
-    secrets: inherit
-
   # 2) Dev landing zone — waits on BOTH the primary gateway and the entire DR
   #    chain. The DR layer reads dev's state for the mgmt VM identity, the shared
   #    ACR and the jump VNet, and owns both halves of the jump↔DR-spoke peering.
@@ -147,7 +138,7 @@ jobs:
   #
   #    Without the DR block above, this reverts to `needs: appgw`.
   dev:
-    needs: [appgw, dr, agc]
+    needs: [appgw, dr]
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/landing-zones/dev, destroy: true }
     secrets: inherit

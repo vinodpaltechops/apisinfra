@@ -21,15 +21,8 @@ variable "vault_private_dns_zone_id" {
 }
 
 variable "vm_identity_principal_id" {
-  description = "Object ID of the VM managed identity granted Secrets User. Ignored when grant_vm_identity_access is false."
+  description = "Object ID of the VM managed identity granted Secrets User."
   type        = string
-  default     = null
-}
-
-variable "grant_vm_identity_access" {
-  description = "Create the VM identity's role assignments. A separate flag rather than a null check on vm_identity_principal_id: that ID is unknown until apply when a VM supplies it, and count cannot depend on an unknown value. Set false when the landing zone has no VM."
-  type        = bool
-  default     = true
 }
 
 variable "allowed_ip_rules" {
