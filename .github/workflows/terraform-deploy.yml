@@ -20,12 +20,13 @@ name: terraform-deploy
 
 on:
   push:
-    # feat/agc-centralindia: runs the deploy from the AGC branch so it can be
-    # validated end to end before merging. Remove it (back to [main]) at merge.
+    # dev: the AGC work is merged here first and validated from here before it
+    # goes to main. Remove it (back to [main]) once that is done.
     # Needs a federated credential on the Azure app registration for the subject
-    #   repo:vinodpaltechops/apisinfra:ref:refs/heads/feat/agc-centralindia
-    # Without it the OIDC login fails on every layer, starting with the first.
-    branches: [main, feat/agc-centralindia]
+    #   repo:vinodpaltechops/apisinfra:ref:refs/heads/dev
+    # (scripts/setup-azure-oidc.sh adds it). Without it the OIDC login fails on
+    # every layer, starting with the first.
+    branches: [main, dev]
     paths:
       - "infra/**"
       - ".github/workflows/**"

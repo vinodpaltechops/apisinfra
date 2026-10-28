@@ -11,6 +11,11 @@
 allowed_ip_rules       = ["163.223.164.0/24"] # your ISP range (KV secret seeding)
 mgmt_ssh_source_prefix = "Internet"           # NSG service tag: any public address
 
+# Who may reach the PUBLIC AKS API server (kubectl from the laptop). Same ISP
+# range as allowed_ip_rules above; keep the two in step if the ISP range changes.
+# The pipelines use `az aks command invoke`, which does not depend on this list.
+aks_authorized_ip_ranges = ["163.223.164.0/24"]
+
 # Lets the mgmt VM's identity run `az keyvault certificate import` for the App
 # Gateway TLS cert (the vault is private, so that only works from inside the
 # VNet). Not a secret, so it must live HERE and not in terraform.tfvars —
