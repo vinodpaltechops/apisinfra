@@ -107,8 +107,8 @@ locals {
   # Reused from the dev landing zone — see the header for why each is shared
   # rather than duplicated.
   dev_resource_group_name = data.terraform_remote_state.dev.outputs.resource_group_name
-  # mgmt_vm_principal_id  = data.terraform_remote_state.dev.outputs.mgmt_vm_identity_principal_id # dev's mgmt VM is disabled (feat/agc-centralindia)
-  acr_name = data.terraform_remote_state.dev.outputs.acr_name
+  mgmt_vm_principal_id    = data.terraform_remote_state.dev.outputs.mgmt_vm_identity_principal_id
+  acr_name                = data.terraform_remote_state.dev.outputs.acr_name
 }
 
 # State storage account + resource group. Same file `terraform init` reads via
@@ -253,12 +253,11 @@ module "aks" {
   pod_cidr                = local.aks_pod_cidr
   tags                    = local.tags
 
-  # Disabled with dev's mgmt VM (feat/agc-centralindia). While it is off this
-  # private cluster is reached with `az aks command invoke`, which needs only
-  # the operator grant below. Restore both lines when the VM comes back.
-  # additional_admin_principals = {
-  #   mgmt_vm = local.mgmt_vm_principal_id
-  # }
+  # Same mgmt VM as the primary cluster. One bastion replacement drives both
+  # regions; it already holds the equivalent roles on the dev cluster.
+  additional_admin_principals = {
+    mgmt_vm = local.mgmt_vm_principal_id
+  }
 
   grant_operator_cluster_admin = true # lab: allow kubectl from your workstation
 

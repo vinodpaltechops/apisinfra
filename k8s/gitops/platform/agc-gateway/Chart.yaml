@@ -1,5 +1,0 @@
-apiVersion: v2
-name: agc-gateway
-description: Gateway API entry point (Application Gateway for Containers) for the content-hub namespace.
-type: application
-version: 0.1.0

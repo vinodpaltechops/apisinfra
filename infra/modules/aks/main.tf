@@ -1,8 +1,7 @@
 # MODULE: aks
-# AKS cluster deployed into the spoke's reserved snet-aks-system /
+# Private AKS cluster deployed into the spoke's reserved snet-aks-system /
 # snet-aks-user subnets. Azure CNI Overlay, Azure AD + Azure RBAC, private API
-# server by default (private_cluster_enabled = false for a public, IP-restricted
-# one), OMS agent → hub Log Analytics, Key Vault secrets provider. The jump
+# server, OMS agent → hub Log Analytics, Key Vault secrets provider. The jump
 # VM's managed identity is granted cluster admin/user so kubectl works from it.
 #
 # AKS manages its own private DNS zone (private_dns_zone_id = "System") in the
@@ -33,17 +32,9 @@ resource "azurerm_user_assigned_identity" "aks" {
   tags                = var.tags
 }
 
-# Gained a count when public clusters became possible; keep the existing state
-# entry instead of planning a destroy + create.
-moved {
-  from = azurerm_role_assignment.aks_dns_contributor
-  to   = azurerm_role_assignment.aks_dns_contributor[0]
-}
-
 # Must exist BEFORE the cluster: lets the control plane create the API-server
-# A-record in the hub's pre-created private DNS zone. Private clusters only.
+# A-record in the hub's pre-created private DNS zone.
 resource "azurerm_role_assignment" "aks_dns_contributor" {
-  count                = var.private_cluster_enabled ? 1 : 0
   scope                = var.aks_private_dns_zone_id
   role_definition_name = "Private DNS Zone Contributor"
   principal_id         = azurerm_user_assigned_identity.aks.principal_id
@@ -68,23 +59,12 @@ resource "azurerm_kubernetes_cluster" "this" {
   dns_prefix          = "aks-${var.env}-lab"
   kubernetes_version  = var.kubernetes_version
 
-  # Private (default): bring-your-own DNS zone, pre-created + hub-linked in the
-  # connectivity layer. The BYO zone lets the hub resolver answer the API FQDN
-  # during node bootstrap — no System-zone deadlock, no public FQDN needed.
-  #
-  # Public (private_cluster_enabled = false): the API server gets a public FQDN
-  # and no private DNS zone is used (Azure rejects a BYO zone on a public
-  # cluster). Restrict it with api_server_authorized_ip_ranges.
-  private_cluster_enabled             = var.private_cluster_enabled
-  private_cluster_public_fqdn_enabled = var.private_cluster_enabled ? false : null
-  private_dns_zone_id                 = var.private_cluster_enabled ? var.aks_private_dns_zone_id : null
-
-  dynamic "api_server_access_profile" {
-    for_each = !var.private_cluster_enabled && length(var.api_server_authorized_ip_ranges) > 0 ? [1] : []
-    content {
-      authorized_ip_ranges = var.api_server_authorized_ip_ranges
-    }
-  }
+  # PRIVATE cluster with a bring-your-own DNS zone (pre-created + hub-linked in
+  # the connectivity layer). The BYO zone lets the hub resolver answer the API
+  # FQDN during node bootstrap — no System-zone deadlock, no public FQDN needed.
+  private_cluster_enabled             = true
+  private_cluster_public_fqdn_enabled = false
+  private_dns_zone_id                 = var.aks_private_dns_zone_id
 
   # Enable the OIDC issuer + workload identity so the OIDC output is meaningful.
   oidc_issuer_enabled       = true
