@@ -1,0 +1,25 @@
+# k8s/base/networkpolicy.yaml denies all ingress and then allows ingress-nginx.
+# The AGC data plane is not a pod, it arrives from the delegated subnet, so it
+# needs its own ipBlock rule. NetworkPolicies are additive: this adds a door
+# without touching the nginx one, and both entry paths keep working.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-agc
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [{{ .Values.frontend.service }}, {{ .Values.backend.service }}]
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: {{ required "subnetCidr is not set — the agc-gateway ApplicationSet must provide it" .Values.subnetCidr | quote }}
+      ports:
+        - port: {{ .Values.frontend.port }}
+          protocol: TCP
+        - port: {{ .Values.backend.port }}
+          protocol: TCP

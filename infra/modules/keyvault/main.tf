@@ -84,8 +84,16 @@ resource "azurerm_role_assignment" "terraform_sp_kv_admin" {
   principal_id         = data.azurerm_client_config.current.object_id
 }
 
+# Both VM-identity assignments gained a count; without these the existing state
+# entries (qa/prod, and dev before this change) would plan as destroy + create.
+moved {
+  from = azurerm_role_assignment.vm_identity_kv_secrets_user
+  to   = azurerm_role_assignment.vm_identity_kv_secrets_user[0]
+}
+
 # The VM's managed identity gets read-only access to secret values
 resource "azurerm_role_assignment" "vm_identity_kv_secrets_user" {
+  count                = var.grant_vm_identity_access ? 1 : 0
   scope                = azurerm_key_vault.this.id
   role_definition_name = "Key Vault Secrets User"
   principal_id         = var.vm_identity_principal_id
@@ -104,7 +112,7 @@ resource "azurerm_role_assignment" "vm_identity_kv_secrets_user" {
 # separate role. Off by default: this is write access to private keys, so only
 # enable it while a certificate genuinely needs installing.
 resource "azurerm_role_assignment" "vm_identity_kv_certificates_officer" {
-  count                = var.grant_vm_certificate_officer ? 1 : 0
+  count                = var.grant_vm_identity_access && var.grant_vm_certificate_officer ? 1 : 0
   scope                = azurerm_key_vault.this.id
   role_definition_name = "Key Vault Certificates Officer"
   principal_id         = var.vm_identity_principal_id

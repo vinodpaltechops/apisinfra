@@ -1,0 +1,64 @@
+# Gateway + HTTPRoute + health checks + NetworkPolicy — PRIMARY cluster.
+#
+# Lands in the content-hub namespace next to the Services it routes to. The
+# existing Ingress and ingress-nginx are untouched: both entrances serve the same
+# Services until DNS is deliberately moved to the AGC frontend.
+#
+# The Azure identifiers (AGC id, frontend name, gateway subnet range) come from
+# the agc Terraform layer through the cluster secret's annotations.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: agc-gateway
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            gitops.vinorg/cluster: dev
+
+  template:
+    metadata:
+      name: agc-gateway
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: default
+
+      source:
+        repoURL: https://github.com/vinodpaltechops/apisinfra.git
+        # The branch under test. Back to `main` when this is merged — see
+        # k8s/gitops/bootstrap/root-app-agc-dev.yaml.
+        targetRevision: feat/agc-centralindia
+        path: k8s/gitops/platform/agc-gateway
+        helm:
+          releaseName: agc-gateway
+          valuesObject:
+            albId: '{{ .metadata.annotations.agcId }}'
+            frontendName: '{{ .metadata.annotations.agcFrontendName }}'
+            subnetCidr: '{{ .metadata.annotations.agcSubnetCidr }}'
+
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: content-hub
+
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+        retry:
+          # The Gateway is rejected until the controller's CRDs exist and its
+          # pod is up; on a cold cluster the first sync can lose that race.
+          limit: 5
+          backoff:
+            duration: 30s
+            factor: 2
+            maxDuration: 5m

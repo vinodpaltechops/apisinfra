@@ -79,6 +79,7 @@ locals {
     "Microsoft.OperationalInsights",  # Log Analytics workspace
     "Microsoft.OperationsManagement", # AKS Container Insights (oms_agent)
     "Microsoft.PolicyInsights",       # policy compliance + DINE remediation
+    "Microsoft.ServiceNetworking",    # Application Gateway for Containers (platform/agc, via azapi)
     "Microsoft.Storage",              # this layer's state account, Velero backup store
   ])
 }
@@ -186,6 +187,8 @@ resource "azurerm_storage_container" "layers" {
     "trafficmanager",
     # Public Azure DNS zone + the app record that points at Traffic Manager.
     "dns",
+    # Application Gateway for Containers (Gateway API entry point, dev spoke).
+    "agc",
   ])
 
   name                  = each.key
