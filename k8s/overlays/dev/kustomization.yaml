@@ -15,13 +15,13 @@ resources:
 images:
 - name: backend
   newName: acrdevvinorg001.azurecr.io/content-hub/backend
-  newTag: fe2c1513211179aab4c15d5ffc4a2f8cb9479ab9
+  newTag: e1eaa67ca06cfab74ae0950cc2006863e1828efa
 - name: content-api
   newName: acrdevvinorg001.azurecr.io/content-hub/content-api
-  newTag: fe2c1513211179aab4c15d5ffc4a2f8cb9479ab9
+  newTag: e1eaa67ca06cfab74ae0950cc2006863e1828efa
 - name: frontend
   newName: acrdevvinorg001.azurecr.io/content-hub/frontend
-  newTag: fe2c1513211179aab4c15d5ffc4a2f8cb9479ab9
+  newTag: e1eaa67ca06cfab74ae0950cc2006863e1828efa
 
 # Images always come from the registry in the cluster — IfNotPresent would let
 # a stale node-cached layer win when a tag is ever reused.
