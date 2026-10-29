@@ -72,9 +72,21 @@ jobs:
   #   with: { layer_path: infra/platform/policies-dine, apply: true }
   #   secrets: inherit
 
-  # 4) Dev landing zone — reads hub outputs from (3) [needs (3) fully applied first]
-  dev:
+  # 3c) Key Vault — the dev vault and the TLS certificate in it, in a resource
+  #     group of its own so a teardown does not take them. Absent from
+  #     terraform-destroy.yml on purpose. Before dev, because dev reads its state
+  #     for the vault ID and builds the private endpoint against it.
+  #     Uses the existing `keyvault` state container (key keyvault-persistent).
+  keyvault:
     needs: connectivity
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/keyvault, apply: true }
+    secrets: inherit
+
+  # 4) Dev landing zone — reads hub outputs from (3) and the vault from (3c)
+  #    [needs both fully applied first]
+  dev:
+    needs: keyvault
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/landing-zones/dev, apply: true }
     secrets: inherit

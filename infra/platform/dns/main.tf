@@ -12,10 +12,21 @@
 # record against the old zone BEFORE switching nameservers; after the switch,
 # anything not copied here stops resolving (mail included).
 #
+# ── Survives the destroy pipeline ─────────────────────────────────────────────
+# This layer is DELIBERATELY ABSENT from terraform-destroy.yml. Tearing the stack
+# down leaves the zone, and every record in it, in place — the registrar keeps
+# pointing at a zone that exists, so the domain keeps resolving (the app record
+# then targets a Traffic Manager name that is gone, which is NXDOMAIN for the app
+# only). Re-deploying puts a fresh CNAME on it; the zone and its nameservers do
+# not change.
+#
+# prevent_destroy on the resource group and the zone is the second guard: a
+# manual `terraform destroy` here fails at plan time.
+#
 # ── Removing it ───────────────────────────────────────────────────────────────
-# Restore GoDaddy's nameservers at the registrar, then destroy this layer.
-# Destroying first leaves the domain delegated to a zone that no longer exists:
-# every lookup fails (SERVFAIL), not just app.
+# Restore GoDaddy's nameservers at the registrar FIRST. Destroying a zone the
+# domain is still delegated to leaves every lookup failing (SERVFAIL), not just
+# app. Then delete the two prevent_destroy blocks below and destroy by hand.
 
 terraform {
   required_version = ">= 1.7.0"
@@ -71,23 +82,52 @@ resource "azurerm_resource_group" "dns" {
   name     = "rg-dns-${var.org_name}-001"
   location = var.location
   tags     = local.tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "azurerm_dns_zone" "this" {
   name                = var.zone_name
   resource_group_name = azurerm_resource_group.dns.name
   tags                = local.tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # The cutover record. Lives here, not in the trafficmanager layer, because the
 # zone is what makes it real.
+#
+# Created only while a Traffic Manager profile exists. The profile is destroyed
+# with the rest of the stack but this zone is not, so after a teardown the
+# trafficmanager state has no `fqdn` output; reading it unguarded would make this
+# layer unplannable until trafficmanager is applied again.
+#
+# The consequence to know: APPLYING this layer while that output is missing
+# deletes the record (count goes to 0). The deploy order (trafficmanager, then
+# dns) means it normally never does.
+locals {
+  tm_fqdn = try(data.terraform_remote_state.trafficmanager.outputs.fqdn, null)
+}
+
 resource "azurerm_dns_cname_record" "app" {
+  count = local.tm_fqdn == null ? 0 : 1
+
   name                = local.app_record_name
   zone_name           = azurerm_dns_zone.this.name
   resource_group_name = azurerm_resource_group.dns.name
   ttl                 = var.app_ttl
-  record              = data.terraform_remote_state.trafficmanager.outputs.fqdn
+  record              = local.tm_fqdn
   tags                = local.tags
+}
+
+# The record keeps its old address; it only has a [0] now.
+moved {
+  from = azurerm_dns_cname_record.app
+  to   = azurerm_dns_cname_record.app[0]
 }
 
 resource "azurerm_dns_cname_record" "extra" {

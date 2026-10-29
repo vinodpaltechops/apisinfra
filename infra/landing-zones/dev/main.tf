@@ -223,37 +223,41 @@ resource "azurerm_virtual_network_peering" "spoke_to_jump" {
   allow_forwarded_traffic      = true
 }
 
-# ── Key Vault (private endpoint, VM identity gets Secrets User) ────────────────
-module "keyvault" {
-  source = "../../modules/keyvault"
+# ── Key Vault — lives in platform/keyvault, only the private endpoint is here ───
+# The vault itself (and so the TLS certificate in it) must survive a teardown, so
+# it has its own resource group, state and deploy slot, and is absent from the
+# destroy pipeline. This landing zone keeps just the private endpoint, because it
+# pins a subnet in this spoke and so has to be destroyed with it.
+#
+# Needs platform/keyvault applied first; terraform-deploy.yml orders it before
+# dev.
+data "terraform_remote_state" "keyvault" {
+  backend = "azurerm"
+  config = merge(local.tfstate_backend, {
+    container_name = "keyvault"
+    key            = "keyvault-persistent.tfstate"
+  })
+}
 
-  env                       = local.env
-  resource_group_name       = module.spoke_network.resource_group_name
-  location                  = var.location
-  subnet_id                 = module.spoke_network.data_subnet_id
-  vault_private_dns_zone_id = local.vault_dns_zone_id
-  # No VM left (mgmt and jump are both commented out), so there is no identity
-  # to grant. Restore module "linux_vm_mgmt", set this back to true and pass
-  # vm_identity_principal_id = module.linux_vm_mgmt.vm_principal_id.
-  grant_vm_identity_access = false
-  allowed_ip_rules         = var.allowed_ip_rules
-  # Only meaningful with a VM identity; moot while grant_vm_identity_access is
-  # false. See docs/public-endpoint.md for the certificate-import flow.
-  grant_vm_certificate_officer = var.grant_vm_certificate_officer
+resource "azurerm_private_endpoint" "keyvault" {
+  name                = "pe-keyvault-${local.env}"
+  resource_group_name = module.spoke_network.resource_group_name
+  location            = var.location
+  subnet_id           = module.spoke_network.data_subnet_id
 
-  # REQUIRED for App Gateway TLS. The gateway reads the certificate from its
-  # control plane, which is outside this VNet and so cannot use the private
-  # endpoint; with the public endpoint removed it fails with
-  # ApplicationGatewayKeyVaultSecretAccessDenied even though its RBAC is correct.
-  #
-  # This does not open the vault: network_acls keeps default_action = "Deny", so
-  # only the AzureServices bypass (which covers App Gateway) and allowed_ip_rules
-  # get through, and the private endpoint keeps working unchanged.
-  #
-  # Set back to false if you drop the App Gateway — but note that also silently
-  # disables allowed_ip_rules, since the firewall stops applying.
-  public_network_access_enabled = var.keyvault_public_network_access_enabled
-  tags                          = local.tags
+  private_service_connection {
+    name                           = "psc-keyvault-${local.env}"
+    private_connection_resource_id = data.terraform_remote_state.keyvault.outputs.key_vault_id
+    is_manual_connection           = false
+    subresource_names              = ["vault"]
+  }
+
+  private_dns_zone_group {
+    name                 = "pdz-group-vault"
+    private_dns_zone_ids = [local.vault_dns_zone_id]
+  }
+
+  tags = local.tags
 }
 
 # ── AKS cluster (private, into the reserved snet-aks-* subnets) ────────────────

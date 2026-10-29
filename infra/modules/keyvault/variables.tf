@@ -10,14 +10,22 @@ variable "location" {
   type = string
 }
 
+variable "create_private_endpoint" {
+  description = "Create the private endpoint inside this module. Set false for a vault that must outlive the network it is reached from (platform/keyvault): a private endpoint pins a subnet, and a subnet that cannot be deleted blocks the landing zone's teardown. That vault gets its endpoint from the landing zone instead."
+  type        = bool
+  default     = true
+}
+
 variable "subnet_id" {
-  description = "Subnet for the Key Vault private endpoint (typically the spoke's snet-data)."
+  description = "Subnet for the Key Vault private endpoint (typically the spoke's snet-data). Only read when create_private_endpoint is true."
   type        = string
+  default     = null
 }
 
 variable "vault_private_dns_zone_id" {
-  description = "ID of the shared privatelink.vaultcore zone from the hub (connectivity) layer."
+  description = "ID of the shared privatelink.vaultcore zone from the hub (connectivity) layer. Only read when create_private_endpoint is true."
   type        = string
+  default     = null
 }
 
 variable "vm_identity_principal_id" {
