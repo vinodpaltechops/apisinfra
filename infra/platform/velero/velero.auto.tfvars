@@ -26,4 +26,9 @@ backup_soft_delete_days = 30
 
 # Set false to apply this layer BEFORE the DR region exists — it then skips the
 # landing-zones-dr state read entirely. Flip to true once DR is applied.
-enable_dr = true
+# false while the DR region is disabled in the pipeline. The layer then skips
+# the landing-zones-dr state read entirely — with true it fails at plan, because
+# nothing has written that state. The backup store itself still exists and the
+# dev cluster still backs up to it; only the DR cluster's federated credential
+# is skipped. Flip back to true together with the pipeline's dr job.
+enable_dr = false

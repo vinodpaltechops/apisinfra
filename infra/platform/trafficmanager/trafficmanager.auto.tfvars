@@ -14,7 +14,14 @@ dr_location      = "indiasouthcentral"
 # Set false to run with the primary endpoint only — either before the DR region
 # exists, or to park DR without destroying the profile. Neither is user-visible;
 # the endpoint keeps serving from the primary.
-enable_dr_endpoint = true
+# false while the DR region is disabled in the pipeline — with true this layer
+# reads the appgw-dr state, which nothing has written, and fails at plan.
+#
+# The profile then holds ONE endpoint, which fails over nowhere. That is the
+# point of keeping it: the *.trafficmanager.net hostname survives, so
+# re-enabling DR needs no registrar change. Flip back with the pipeline's
+# appgw-dr job.
+enable_dr_endpoint = false
 
 # ── Failover timing ───────────────────────────────────────────────────────────
 # Detection = interval x (tolerated_failures + 1) = 30 x 4 ≈ 2 min.
