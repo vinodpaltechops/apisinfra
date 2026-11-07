@@ -8,24 +8,16 @@
 # of which can succeed without the private key.
 #
 # To lock it down again, set a CIDR here (e.g. your ISP's /24) and re-apply.
-allowed_ip_rules       = ["163.223.164.0/24"] # your ISP range (KV secret seeding)
-mgmt_ssh_source_prefix = "Internet"           # NSG service tag: any public address
+mgmt_ssh_source_prefix = "Internet" # NSG service tag: any public address
+
+# The Key Vault firewall range (allowed_ip_rules) moved with the vault to
+# infra/platform/keyvault/keyvault.auto.tfvars.
 
 # Who may reach the PUBLIC AKS API server (kubectl from the laptop). Same ISP
-# range as allowed_ip_rules above; keep the two in step if the ISP range changes.
+# range as the Key Vault firewall in infra/platform/keyvault/keyvault.auto.tfvars;
+# keep the two in step if the ISP range changes.
 # The pipelines use `az aks command invoke`, which does not depend on this list.
 aks_authorized_ip_ranges = ["163.223.164.0/24"]
-
-# Lets the mgmt VM's identity run `az keyvault certificate import` for the App
-# Gateway TLS cert (the vault is private, so that only works from inside the
-# VNet). Not a secret, so it must live HERE and not in terraform.tfvars —
-# terraform.tfvars is gitignored, so CI never sees it and would silently fall
-# back to the default of false, and the import would 403.
-#
-# Set back to false once the certificate is installed; it is write access to
-# private keys. The gateway keeps working — it reads the cert with its own
-# identity, which only needs Secrets User.
-grant_vm_certificate_officer = true
 
 # ── DR: registry geo-replication ──────────────────────────────────────────────
 # OFF by default — the registry stays Basic and single-region, exactly as it is

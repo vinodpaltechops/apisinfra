@@ -9,7 +9,7 @@ output "name_servers" {
 
 output "app_record" {
   description = "What app_fqdn resolves to once the zone is live."
-  value       = "${var.app_fqdn} CNAME ${azurerm_dns_cname_record.app.record}"
+  value       = length(azurerm_dns_cname_record.app) == 0 ? "${var.app_fqdn} has no record: no Traffic Manager profile exists" : "${var.app_fqdn} CNAME ${azurerm_dns_cname_record.app[0].record}"
 }
 
 output "delegation" {

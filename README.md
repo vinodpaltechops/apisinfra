@@ -34,10 +34,16 @@ export ARM_SUBSCRIPTION_ID="<management-subscription-id>"
 2. management-groups/   → builds MG hierarchy
 3. policies/            → assigns Azure Policy
 4. connectivity/        → deploys Hub VNet, Firewall, Bastion, DNS Resolver
+4b. platform/keyvault/  → dev Key Vault in its own resource group (survives teardown)
 5. landing-zones/dev/   → dev spoke VNet + peering + UDR
 6. landing-zones/qa/    → qa spoke VNet + peering + UDR
 7. landing-zones/prod/  → prod spoke VNet + peering + UDR
 8. platform/appgw/      → public entry point (WAF_v2) for the dev workload
+
+Survive the destroy pipeline (not in terraform-destroy.yml, prevent_destroy set):
+  platform/keyvault/   the dev vault and the TLS certificate in it
+  platform/dns/        the public zone and its records
+  platform/velero/     the backup store
 
 ── DR add-on (comment out the DR block in terraform-deploy.yml to skip) ──
 9.  landing-zones/dr/   → second-region spoke + private AKS

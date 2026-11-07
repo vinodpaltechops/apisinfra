@@ -149,7 +149,16 @@ resource "azurerm_role_assignment" "vm_identity_kv_certificates_officer" {
 # }
 
 # ── Private endpoint + DNS ────────────────────────────────────────────────────
+# Gained a count; keep the existing state entry (qa/prod) instead of planning a
+# destroy + create.
+moved {
+  from = azurerm_private_endpoint.keyvault
+  to   = azurerm_private_endpoint.keyvault[0]
+}
+
 resource "azurerm_private_endpoint" "keyvault" {
+  count = var.create_private_endpoint ? 1 : 0
+
   name                = "pe-keyvault-${var.env}"
   resource_group_name = var.resource_group_name
   location            = var.location

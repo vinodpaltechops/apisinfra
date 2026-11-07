@@ -38,12 +38,12 @@ output "spoke_subnet_ids" {
 # }
 
 output "key_vault_id" {
-  description = "Resource ID of the vault. The gateway layers read it to grant their identities Key Vault Secrets User."
-  value       = module.keyvault.key_vault_id
+  description = "Resource ID of the vault (platform/keyvault, re-exported so the gateway layers keep reading it from here). They use it to grant their identities Key Vault Secrets User."
+  value       = data.terraform_remote_state.keyvault.outputs.key_vault_id
 }
 
 output "key_vault_uri" {
-  value = module.keyvault.key_vault_uri
+  value = data.terraform_remote_state.keyvault.outputs.key_vault_uri
 }
 
 output "aks_cluster_name" {

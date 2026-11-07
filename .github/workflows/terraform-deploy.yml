@@ -72,9 +72,21 @@ jobs:
   #   with: { layer_path: infra/platform/policies-dine, apply: true }
   #   secrets: inherit
 
-  # 4) Dev landing zone — reads hub outputs from (3) [needs (3) fully applied first]
-  dev:
+  # 3c) Key Vault — the dev vault and the TLS certificate in it, in a resource
+  #     group of its own so a teardown does not take them. Absent from
+  #     terraform-destroy.yml on purpose. Before dev, because dev reads its state
+  #     for the vault ID and builds the private endpoint against it.
+  #     Uses the existing `keyvault` state container (key keyvault-persistent).
+  keyvault:
     needs: connectivity
+    uses: ./.github/workflows/tf-layer.yml
+    with: { layer_path: infra/platform/keyvault, apply: true }
+    secrets: inherit
+
+  # 4) Dev landing zone — reads hub outputs from (3) and the vault from (3c)
+  #    [needs both fully applied first]
+  dev:
+    needs: keyvault
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/landing-zones/dev, apply: true }
     secrets: inherit
@@ -137,14 +149,38 @@ jobs:
   # containers, and no state file is touched.
   # ─────────────────────────────────────────────────────────────────────────────
 
+  # ── DR COMPUTE IS DISABLED — single region while credits are the constraint ──
+  # The two expensive layers are commented out below: the DR landing zone (a
+  # 2-node AKS cluster plus its NAT gateway) and the DR App Gateway (WAF_v2,
+  # billed per hour whether or not it serves a request). Together they were the
+  # bulk of the spend and neither does anything until a failover.
+  #
+  # What stays, and why:
+  #   • velero       — the backup STORE, a few pennies of blob. The dev cluster
+  #                    backs up to it, argocd-bootstrap verifies its outputs,
+  #                    and Argo CD syncs a Velero into dev from it. Dropping it
+  #                    breaks dev's backups, not just DR. Now needs dev, not dr.
+  #   • trafficmanager — one endpoint instead of two (~$0.50/mo). The dns layer
+  #                    depends on it, and keeping it means the public hostname
+  #                    does not move when DR comes back.
+  #
+  # TO RE-ENABLE DR, all four together:
+  #   1. uncomment the `dr` and `appgw-dr` jobs below
+  #   2. velero: needs dev  ->  needs dr
+  #   3. trafficmanager: needs [appgw]  ->  needs [appgw, appgw-dr]
+  #   4. flip enable_dr = true (velero.auto.tfvars) and
+  #      enable_dr_endpoint = true (trafficmanager.auto.tfvars)
+  # Steps 1-3 without step 4 is the broken middle: the layers apply but still
+  # read a DR state that nothing has written.
+  #
   # 6) DR landing zone — spoke + private AKS in the second region.
   #    Needs dev applied: it reads dev's state for the mgmt VM identity, the
   #    shared ACR and the jump VNet.
-  dr:
-    needs: dev
-    uses: ./.github/workflows/tf-layer.yml
-    with: { layer_path: infra/landing-zones/dr, apply: true }
-    secrets: inherit
+  # dr:
+  #   needs: dev
+  #   uses: ./.github/workflows/tf-layer.yml
+  #   with: { layer_path: infra/landing-zones/dr, apply: true }
+  #   secrets: inherit
 
   # 7) Velero backup store — federates BOTH clusters' OIDC issuers, so it needs
   #    both landing zones applied. Creates no Kubernetes objects; the Velero
@@ -152,18 +188,23 @@ jobs:
   #
   #    NOTE: this layer holds the backups. Adding it here is safe, but never add
   #    it to terraform-destroy without meaning it.
+  #
+  #    needs dev, not dr, while DR is disabled — and enable_dr = false in its
+  #    tfvars, or it reads a landing-zones-dr state that nothing has written.
   velero:
-    needs: dr
+    needs: dev
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/platform/velero, apply: true }
     secrets: inherit
 
   # 8) DR Application Gateway — the second region's origin.
-  appgw-dr:
-    needs: dr
-    uses: ./.github/workflows/tf-layer.yml
-    with: { layer_path: infra/platform/appgw-dr, apply: true }
-    secrets: inherit
+  #    DISABLED with the DR landing zone above: WAF_v2 is billed hourly from the
+  #    moment it exists, and this one has no backend to serve while DR is down.
+  # appgw-dr:
+  #   needs: dr
+  #   uses: ./.github/workflows/tf-layer.yml
+  #   with: { layer_path: infra/platform/appgw-dr, apply: true }
+  #   secrets: inherit
 
   # 9) Traffic Manager — the global entry point ACTUALLY IN USE, standing in
   #    for Front Door (job 10), which this subscription tier forbids.
@@ -179,8 +220,12 @@ jobs:
   #
   #    NEVER run this and job 10 at the same time. Two systems owning the same
   #    hostname's failover is how a failover ends up pointing at a dead region.
+  #    ONE ENDPOINT while DR is disabled: needs only appgw, and
+  #    enable_dr_endpoint = false in its tfvars. A profile with a single
+  #    endpoint fails over nowhere — it is here to hold the hostname, so that
+  #    re-enabling DR does not mean another registrar change.
   trafficmanager:
-    needs: [appgw, appgw-dr]
+    needs: [appgw]
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/platform/trafficmanager, apply: true }
     secrets: inherit
