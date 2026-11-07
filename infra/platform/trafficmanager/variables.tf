@@ -22,7 +22,21 @@ variable "dr_location" {
 }
 
 variable "app_fqdn" {
-  description = "Public hostname. Must match app_fqdn in BOTH appgw layers — it is the Host header sent on every health probe, and both gateways listen host-based."
+  description = "Public hostname of the application. Used only to print the DNS record and verification commands — the dns layer owns the record itself, and health probes no longer carry this name."
+  type        = string
+}
+
+variable "health_hostname" {
+  description = <<-EOT
+    Sent as the Host header on every health probe. Must be a hostname that has a
+    route on the gateway returning 200 for the probe path — in this stack, the
+    platform health route in k8s/gitops/platform/agc-gateway (values: health
+    .hostname). Keep the two identical: a mismatch gets a 404 from the gateway
+    and degrades every endpoint while the app is perfectly healthy.
+
+    It needs no DNS record. Traffic Manager names the host itself, so the probe
+    never resolves it.
+  EOT
   type        = string
 }
 

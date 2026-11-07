@@ -46,13 +46,15 @@ variable "endpoints" {
 
 variable "probe_host_header" {
   description = <<-EOT
-    Sent as the `host` header on every health probe, and it must be the
-    application's real FQDN.
+    Sent as the `host` header on every health probe. It must name a host the
+    gateway has a route for, answering the probe path with a 2xx.
 
-    Not optional in this stack, despite the null default: the App Gateway
-    listener is host-based, so a probe carrying the default `Host: <target ip>`
-    gets a 404 and marks every endpoint Degraded while the app is perfectly
-    healthy. Null only exists for a future origin that is not host-bound.
+    Not optional in this stack, despite the null default: gateways route by host,
+    so a probe carrying the default `Host: <target>` gets a 404 and marks every
+    endpoint Degraded while the app is perfectly healthy. Prefer a platform-owned
+    health hostname over an application's: a probe on an app's name ties the
+    endpoint's health to that app being deployed. Null only exists for a future
+    origin that is not host-bound.
   EOT
   type        = string
   default     = null

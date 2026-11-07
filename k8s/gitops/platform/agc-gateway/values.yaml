@@ -9,21 +9,33 @@ albId: ""
 # Name of the AGC frontend (output frontend_name).
 frontendName: ""
 # Source range of the gateway's traffic (output agc_subnet_cidr) — what the
-# NetworkPolicy lets through to the pods. AGC's data plane is not a pod, so a
+# NetworkPolicies let through to the pods. AGC's data plane is not a pod, so a
 # podSelector/namespaceSelector can never describe it.
 subnetCidr: ""
 
-# Host the HTTPRoute answers for. Empty = any host, so the route can be tested
-# straight against the AGC frontend FQDN before DNS is switched. Set it to the
-# real name (app.sometestdemo.in) once DNS points here.
-hostnames: []
+# ── The platform contract ─────────────────────────────────────────────────────
+# What an application repository needs to publish through this gateway:
+#   1. attach its HTTPRoute with
+#        parentRefs: [{ name: <gateway.name>, namespace: platform-gateway }]
+#   2. deploy into a namespace listed in tenantNamespaces below, which the
+#      platform also labels <accessLabel>=<accessValue>
+#   3. claim its own hostnames — never leave `hostnames` empty on a shared
+#      gateway, or the route swallows every host nobody else has claimed.
+gateway:
+  name: shared
+  # The label a namespace must carry before its routes may attach. Set by the
+  # platform (managedNamespaceMetadata for this namespace, the overlay for a
+  # tenant) — never by the tenant, or it grants itself access.
+  accessLabel: gateway-access
+  accessValue: shared
 
-frontend:
-  service: frontend
-  port: 8080
-backend:
-  service: backend
-  port: 8000
+# Namespaces that receive the AGC NetworkPolicy door. One line per tenant.
+tenantNamespaces:
+  - content-hub
 
-# Same paths the pods already serve for their own probes.
-healthPath: /healthz
+# Platform-owned probe target. Traffic Manager sends this as the Host header
+# (infra/platform/trafficmanager: health_hostname) — the two must match, and
+# neither needs a DNS record, because Traffic Manager names the host itself.
+health:
+  hostname: health.sometestdemo.in
+  image: nginxinc/nginx-unprivileged:1.27-alpine

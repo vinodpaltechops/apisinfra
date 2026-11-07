@@ -72,16 +72,19 @@ locals {
     Role       = "DisasterRecovery"
   })
 
-  # Targets are assembled from the two App Gateway layers' states rather than
-  # typed as literals: a gateway rebuild changes its public IP, and a stale
-  # literal here sends every user to an address Azure has since handed to
-  # someone else.
+  # Targets are read from the gateway layers' states rather than typed as
+  # literals: a rebuild changes the address, and a stale literal here sends every
+  # user to a name Azure has since handed to someone else.
+  #
+  # The primary is the AGC frontend. It is a HOSTNAME, not an IP — AGC exposes no
+  # public address — and Traffic Manager's external endpoint accepts either. The
+  # DR endpoint is still the DR App Gateway's IP until DR moves to AGC too.
   #
   # Static keys ("primary"/"dr"); only the values are apply-time unknowns.
   endpoints = merge(
     {
       primary = {
-        target   = data.terraform_remote_state.appgw.outputs.appgw_public_ip
+        target   = data.terraform_remote_state.agc.outputs.frontend_fqdn
         priority = 1 # takes ALL traffic while healthy
         location = var.primary_location
         enabled  = true
@@ -98,11 +101,11 @@ locals {
   )
 }
 
-data "terraform_remote_state" "appgw" {
+data "terraform_remote_state" "agc" {
   backend = "azurerm"
   config = merge(local.tfstate_backend, {
-    container_name = "appgw"
-    key            = "appgw.tfstate"
+    container_name = "agc"
+    key            = "agc.tfstate"
   })
 }
 
@@ -133,9 +136,12 @@ module "trafficmanager" {
 
   endpoints = local.endpoints
 
-  # The gateways listen host-based, so probes MUST carry the app's FQDN or they
-  # 404 and degrade every endpoint. See modules/trafficmanager/main.tf.
-  probe_host_header = var.app_fqdn
+  # Probes carry the PLATFORM health hostname, not an app's. The gateway routes
+  # by host, so the probe must name a host that has a route; that route is the
+  # platform-owned health responder (k8s/gitops/platform/agc-gateway), so the
+  # endpoint's health no longer depends on any application being deployed. The
+  # chart's health.hostname must match. See modules/trafficmanager/main.tf.
+  probe_host_header = var.health_hostname
 
   ttl                           = var.ttl
   health_probe_path             = var.health_probe_path

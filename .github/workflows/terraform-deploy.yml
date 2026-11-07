@@ -91,23 +91,27 @@ jobs:
     with: { layer_path: infra/landing-zones/dev, apply: true }
     secrets: inherit
 
-  # 5) Application Gateway (WAF) — the public entry point. Last, because it
-  #    forwards to the dev spoke's internal ingress LB.
+  # 5) Application Gateway (WAF) — DISABLED. AGC (5b) is the public entry point
+  #    now, so a redeploy no longer recreates this gateway: WAF_v2 bills hourly
+  #    from the moment it exists, and nothing routes through it.
   #
-  #    It does not read dev's state (the ingress VIP is pinned to a static
-  #    address), so applying it before the app exists is harmless — the backend
-  #    simply reports Unhealthy until ingress-nginx is running.
-  appgw:
-    needs: dev
-    uses: ./.github/workflows/tf-layer.yml
-    with: { layer_path: infra/platform/appgw, apply: true }
-    secrets: inherit
+  #    The layer, module and tfvars stay on disk. terraform-destroy.yml KEEPS its
+  #    appgw job on purpose, so a teardown still removes a gateway deployed
+  #    before this was disabled; against an empty state it is a no-op.
+  #
+  #    TO RE-ENABLE: uncomment this job, and set trafficmanager back to read it
+  #    (it now reads the agc layer's state for its endpoint).
+  # appgw:
+  #   needs: dev
+  #   uses: ./.github/workflows/tf-layer.yml
+  #   with: { layer_path: infra/platform/appgw, apply: true }
+  #   secrets: inherit
 
   # 5b) Application Gateway for Containers — the Gateway API entry point, in
-  #     the dev spoke. Reads dev's state (spoke VNet, AKS OIDC issuer), so unlike
-  #     appgw it must follow dev. It runs alongside appgw: nothing is routed
-  #     through it until DNS points at its frontend, and the cluster half (ALB
-  #     Controller + Gateway) is deployed by Argo CD, not here.
+  #     the dev spoke. Reads dev's state (spoke VNet, AKS OIDC issuer), so it must
+  #     follow dev. It is the only public entry point: Traffic Manager targets its
+  #     frontend, and the cluster half (ALB Controller + Gateway) is deployed by
+  #     Argo CD, not here.
   #     Needs the `agc` state container — re-apply bootstrap once first.
   agc:
     needs: dev
@@ -167,7 +171,7 @@ jobs:
   # TO RE-ENABLE DR, all four together:
   #   1. uncomment the `dr` and `appgw-dr` jobs below
   #   2. velero: needs dev  ->  needs dr
-  #   3. trafficmanager: needs [appgw]  ->  needs [appgw, appgw-dr]
+  #   3. trafficmanager: needs [agc]  ->  needs [agc, appgw-dr]
   #   4. flip enable_dr = true (velero.auto.tfvars) and
   #      enable_dr_endpoint = true (trafficmanager.auto.tfvars)
   # Steps 1-3 without step 4 is the broken middle: the layers apply but still
@@ -220,12 +224,18 @@ jobs:
   #
   #    NEVER run this and job 10 at the same time. Two systems owning the same
   #    hostname's failover is how a failover ends up pointing at a dead region.
-  #    ONE ENDPOINT while DR is disabled: needs only appgw, and
+  #    ONE ENDPOINT while DR is disabled: needs only agc, and
   #    enable_dr_endpoint = false in its tfvars. A profile with a single
   #    endpoint fails over nowhere — it is here to hold the hostname, so that
   #    re-enabling DR does not mean another registrar change.
+  #
+  #    Reads the agc layer's state (its primary endpoint is the AGC frontend), so
+  #    it waits on agc, not appgw. It must also apply AFTER the agc-gateway chart
+  #    has synced: its probe sends the platform health hostname, which has no
+  #    route until that chart's health responder is up, and a probe that 404s
+  #    reads Degraded.
   trafficmanager:
-    needs: [appgw]
+    needs: [agc]
     uses: ./.github/workflows/tf-layer.yml
     with: { layer_path: infra/platform/trafficmanager, apply: true }
     secrets: inherit

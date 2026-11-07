@@ -41,6 +41,6 @@ output "verify" {
     "2_resolves_to"     = "dig +short ${module.trafficmanager.fqdn}"
     # %%{ escapes HCL's own template syntax, which would otherwise try to read
     # curl's %{http_code} as a control keyword.
-    "3_serves_app" = "curl -s -o /dev/null -w '%%{http_code}\\n' -H 'Host: ${var.app_fqdn}' http://$(dig +short ${module.trafficmanager.fqdn} | tail -1)/healthz"
+    "3_health_route" = "curl -s -o /dev/null -w '%%{http_code}\\n' -H 'Host: ${var.health_hostname}' http://${module.trafficmanager.fqdn}/healthz"
   }
 }
