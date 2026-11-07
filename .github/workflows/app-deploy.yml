@@ -7,7 +7,15 @@
 # a git commit instead:
 #
 #   build → push to ACR → `kustomize edit set image` in BOTH overlays
-#         → commit to main → Argo CD notices → rolls out in BOTH regions
+#         → commit to the branch that triggered the run → Argo CD notices
+#         → rolls out (the dev cluster reads `dev`; DR reads `main`)
+#
+# The tag is committed to the SAME branch the run started from, not always main.
+# The dev cluster's content-hub Application tracks `dev`, and the tag it deploys
+# is pinned in k8s/overlays/dev/kustomization.yaml on that branch. A build that
+# only ever updated main would leave dev pinned to whatever it last merged — a
+# tag that stops existing the moment the registry is rebuilt, which is
+# ImagePullBackOff rather than an obvious failure.
 #
 # Three things this buys:
 #   • The DR cluster gets the same image automatically. Under the old model it
@@ -31,7 +39,7 @@ name: app-deploy
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     paths:
       - "apps/**"
       - "k8s/**"
@@ -144,8 +152,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           # The default checkout is a detached HEAD at the triggering SHA, which
-          # cannot be pushed from. Check out the branch itself.
-          ref: main
+          # cannot be pushed from. Check out the branch itself — the one that
+          # triggered this run, so the tag lands where the cluster reads it.
+          ref: ${{ github.ref_name }}
           # Use the default GITHUB_TOKEN. Note the deliberate consequence: a
           # push made with it does NOT trigger other workflows, which is a
           # second layer of loop protection behind the [skip ci] below.
@@ -205,11 +214,11 @@ jobs:
           # relying on it alone breaks the moment someone swaps in a PAT.
           git commit -m "chore(deploy): content-hub images -> ${GITHUB_SHA} [skip ci]"
 
-          # Rebase rather than merge: another commit may have landed on main
+          # Rebase rather than merge: another commit may have landed on the branch
           # during the build, and a merge commit from a bot in the deployment
           # history is noise.
-          git pull --rebase --autostash origin main
-          git push origin main
+          git pull --rebase --autostash origin "$GITHUB_REF_NAME"
+          git push origin "HEAD:$GITHUB_REF_NAME"
 
       - name: Report sync status
         run: |

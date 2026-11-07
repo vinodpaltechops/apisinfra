@@ -1,25 +1,60 @@
-# k8s/base/networkpolicy.yaml denies all ingress and then allows ingress-nginx.
-# The AGC data plane is not a pod, it arrives from the delegated subnet, so it
-# needs its own ipBlock rule. NetworkPolicies are additive: this adds a door
-# without touching the nginx one, and both entry paths keep working.
+# The AGC data plane is not a pod: it reaches workloads from the delegated
+# gateway subnet, so a podSelector/namespaceSelector can never describe it and
+# every namespace with a default-deny needs an explicit ipBlock door.
+#
+# The subnet range is a Terraform output (agc_subnet_cidr), injected by the
+# ApplicationSet. It lives HERE, rendered per tenant namespace, so an app
+# repository never has to know or copy it — onboarding a namespace is one line
+# in .Values.tenantNamespaces.
+#
+# It admits every pod and port in the namespace. That is wider than the old
+# frontend/backend-only rule, deliberately: the platform cannot know a tenant's
+# labels or ports, and AGC only forwards to Services that an attached HTTPRoute
+# names, so the route is what limits exposure.
+#
+# NetworkPolicies are additive. A namespace's own default-deny and any other
+# allow rule it carries (such as ingress-nginx) are untouched.
+{{- $cidr := required "subnetCidr is not set — the agc-gateway ApplicationSet must provide it" .Values.subnetCidr }}
+{{- range $ns := .Values.tenantNamespaces }}
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-agc
+  namespace: {{ $ns }}
 spec:
-  podSelector:
-    matchExpressions:
-      - key: app.kubernetes.io/name
-        operator: In
-        values: [{{ .Values.frontend.service }}, {{ .Values.backend.service }}]
+  podSelector: {}
   policyTypes:
     - Ingress
   ingress:
     - from:
         - ipBlock:
-            cidr: {{ required "subnetCidr is not set — the agc-gateway ApplicationSet must provide it" .Values.subnetCidr | quote }}
+            cidr: {{ $cidr | quote }}
+{{- end }}
+---
+# This namespace holds the Gateway and the health responder, and nothing else
+# should ever be able to reach them: default-deny, then the one door.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-agc
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: {{ $cidr | quote }}
       ports:
-        - port: {{ .Values.frontend.port }}
-          protocol: TCP
-        - port: {{ .Values.backend.port }}
+        - port: 8080
           protocol: TCP

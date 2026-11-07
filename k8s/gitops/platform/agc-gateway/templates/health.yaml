@@ -1,0 +1,180 @@
+# Platform-owned health responder. It exists so that "is the gateway path alive"
+# has an answer that does not depend on any application being deployed.
+#
+# Traffic Manager probes this through AGC, on the hostname in .Values.health
+# .hostname. Before it existed the probe went to Content Hub's own /healthz, so
+# the endpoint read Degraded on an empty cluster and flipped with every app
+# release — a platform signal that was really an app signal.
+#
+# What a 200 here proves: the frontend is programmed, the Gateway accepted the
+# route, AGC can reach a pod through the NetworkPolicy, and the pod answers. What
+# it deliberately does NOT prove is that any particular app works. That is the
+# trade for decoupling: failover moves the whole cluster, never one app.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: health
+data:
+  default.conf: |
+    server {
+        listen 8080;
+
+        location = /healthz {
+            access_log off;
+            add_header Content-Type application/json always;
+            return 200 '{"status":"ok","service":"platform-health"}';
+        }
+
+        # Nothing else is served. The route below only forwards /healthz, so this
+        # is reached only by a pod-to-pod request, never through the gateway.
+        location / {
+            return 404;
+        }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: health
+  labels:
+    app.kubernetes.io/name: health
+    app.kubernetes.io/part-of: platform-gateway
+spec:
+  # One replica: this is a probe target, not a service, and the user node pool is
+  # a single node — a second replica would only share its fate.
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: health
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: health
+        app.kubernetes.io/part-of: platform-gateway
+    spec:
+      nodeSelector:
+        nodepool-type: user
+      automountServiceAccountToken: false
+      securityContext:
+        # 101 = the nginx user in nginxinc/nginx-unprivileged.
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: health
+          # Same image family the frontend is built on, pinned the same way. It
+          # is pulled from Docker Hub like the Velero plugin; mirror it into ACR
+          # if anonymous pull limits ever bite the node's shared NAT address.
+          image: {{ .Values.health.image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # The ConfigMap replaces the image's default.conf wholesale. The
+            # entrypoint's listen-on-ipv6 script sees a file that differs from
+            # the packaged one and leaves it alone.
+            - name: conf
+              mountPath: /etc/nginx/conf.d
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: conf
+          configMap:
+            name: health
+        - name: nginx-cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+      terminationGracePeriodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: health
+  labels:
+    app.kubernetes.io/name: health
+    app.kubernetes.io/part-of: platform-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: health
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+# Only /healthz, and only on the health hostname. Every other path on that host
+# has no route, so AGC answers it itself and the pod's own 404 is unreachable.
+#
+# A dedicated hostname rather than a catch-all: Gateway API ranks the more
+# specific hostname first, so an app that claims no hostname at all still cannot
+# shadow this, and this cannot hijack an app's own /healthz on its own hostname.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: health
+spec:
+  parentRefs:
+    - name: {{ .Values.gateway.name }}
+  hostnames:
+    - {{ required "health.hostname is not set" .Values.health.hostname | quote }}
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /healthz
+      backendRefs:
+        - name: health
+          port: 8080
+---
+# AGC probes "/" by default, which this pod answers 404 — so without a policy the
+# backend is marked Unhealthy while the pod is Ready.
+apiVersion: alb.networking.azure.io/v1
+kind: HealthCheckPolicy
+metadata:
+  name: health
+spec:
+  targetRef:
+    group: ""
+    kind: Service
+    name: health
+    namespace: {{ .Release.Namespace }}
+  default:
+    interval: 5s
+    timeout: 3s
+    healthyThreshold: 1
+    unhealthyThreshold: 3
+    port: 8080
+    http:
+      path: /healthz
+      match:
+        statusCodes:
+          - start: 200
+            end: 299

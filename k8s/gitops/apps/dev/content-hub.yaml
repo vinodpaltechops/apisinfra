@@ -20,7 +20,17 @@ spec:
 
   source:
     repoURL: https://github.com/vinodpaltechops/apisinfra.git
-    targetRevision: main
+    # The `dev` branch: changes are proven on the dev cluster first and only then
+    # merged to main. Back to `main` when that flow is retired.
+    #
+    # Two things must hold or this app breaks, both because the image tag lives
+    # in this very path (k8s/overlays/dev/kustomization.yaml):
+    #   • dev must carry a tag that exists in ACR. A rebuilt registry is empty, so
+    #     a stale tag on this branch is ImagePullBackOff, not a no-op.
+    #   • app-deploy triggers on, and commits new tags to, `main` only (its
+    #     `promote` job checks out `ref: main`). They reach this branch only when
+    #     main is merged into it.
+    targetRevision: dev
     path: k8s/overlays/dev
 
   destination:

@@ -25,7 +25,18 @@ spec:
 
   source:
     repoURL: https://github.com/vinodpaltechops/apisinfra.git
-    targetRevision: main
+    # The `dev` branch, so a change to a child Application (such as content-hub's
+    # own targetRevision) can be proven on this cluster BEFORE it reaches main.
+    # Read from main it could not: the child definitions would only ever change
+    # after the merge, which is the thing being tested.
+    #
+    # This is the one object applied by hand, so editing it here changes nothing
+    # in the cluster until argocd-bootstrap is re-run for dev — and it must be run
+    # FROM the dev branch, since the workflow applies the file it checks out.
+    #
+    # The children keep their own sources: ingress-nginx, velero and
+    # backup-schedules still read their values from main.
+    targetRevision: dev
     # PER-CLUSTER PATH. This is the whole multi-cluster mechanism: both clusters
     # run an identical Argo CD against an identical repo, and differ only in
     # which directory their root Application reads. No cluster secrets, no

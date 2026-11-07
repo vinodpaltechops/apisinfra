@@ -1,13 +1,19 @@
-# Gateway: binds to the AGC created by Terraform (BYO deployment), on its
-# frontend. The ALB Controller sees it and programs the gateway; nothing is
-# provisioned in Azure from here.
+# The ONE shared Gateway, bound to the AGC created by Terraform (BYO deployment)
+# on its frontend. The ALB Controller sees it and programs the gateway; nothing
+# is provisioned in Azure from here.
+#
+# It carries no application routes. Apps own their HTTPRoute and attach it with
+#   parentRefs: [{ name: shared, namespace: platform-gateway }]
+# which is allowed only from namespaces labelled gateway-access=shared — see
+# allowedRoutes below. `from: Same` (the old value) would confine routes to this
+# namespace, which is exactly the coupling this chart used to have.
 #
 # HTTP only for now. TLS needs a listener with a certificateRef to a Secret —
 # AGC cannot read Key Vault directly the way the old Application Gateway did.
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: content-hub
+  name: {{ .Values.gateway.name }}
   annotations:
     alb.networking.azure.io/alb-id: {{ required "albId is not set — the agc-gateway ApplicationSet must provide it" .Values.albId | quote }}
 spec:
@@ -18,7 +24,10 @@ spec:
       protocol: HTTP
       allowedRoutes:
         namespaces:
-          from: Same
+          from: Selector
+          selector:
+            matchLabels:
+              {{ .Values.gateway.accessLabel }}: {{ .Values.gateway.accessValue | quote }}
   addresses:
     - type: alb.networking.azure.io/alb-frontend
       value: {{ required "frontendName is not set — the agc-gateway ApplicationSet must provide it" .Values.frontendName | quote }}

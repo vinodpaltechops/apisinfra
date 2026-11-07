@@ -102,13 +102,16 @@ resource "azurerm_traffic_manager_profile" "this" {
     expected_status_code_ranges = var.expected_status_code_ranges
 
     # ── LOAD-BEARING. Without this, nothing works. ─────────────────────────────
-    # Traffic Manager probes the endpoint's target — here a raw public IP — and
-    # by default sends `Host: <that IP>`. The App Gateway listener is host-based
-    # (host_name = app_fqdn in modules/appgw), so it has no rule matching an IP
-    # and answers 404. Measured against the live gateway:
+    # Traffic Manager probes the endpoint's target and by default sends
+    # `Host: <that target>`. The gateways route by host and have no rule matching
+    # a bare IP or the *.alb.azure.com name, so they answer 404. Measured against
+    # the old App Gateway, whose listener was host-bound:
     #
     #   curl -H 'Host: app.sometestdemo.in' http://<gw-ip>/healthz  -> 200
     #   curl                                http://<gw-ip>/healthz  -> 404
+    #
+    # The header should name a platform-owned health host, not an application's
+    # (see the root layer): then the endpoint stays Online on an empty cluster.
     #
     # A 404 is outside expected_status_code_ranges, so EVERY endpoint goes
     # Degraded, and a profile whose endpoints are all degraded hands back the
