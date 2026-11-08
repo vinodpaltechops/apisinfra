@@ -106,8 +106,29 @@ module "spoke_network" {
 }
 
 # ── Peering to the hub (both directions) ──────────────────────────────────────
+# ── Network operations are serialized, on purpose ─────────────────────────────
+# Azure refuses to attach a peering (or a NIC) to a VNet or subnet that is not in
+# the Succeeded state, and every PUT to a subnet moves it to Updating for a few
+# seconds. Left to themselves Terraform runs these in parallel — the subnet
+# updates inside spoke-network (NSG and NAT gateway associations), four peerings,
+# and the Key Vault private endpoint — and whichever lands mid-update fails with
+#
+#   ReferencedResourceNotProvisioned ... last operation is PutSubnetOperation
+#
+# Whether it does depends on timing, so it passes on one run and fails on the
+# next. The resources below reference only a VNet or subnet ID, which exists long
+# before the associations finish, so Terraform sees no reason to wait. depends_on
+# on the MODULE waits for everything inside it. The order, end to end:
+#
+#   spoke_network -> peering -> peering_jump -> spoke_to_jump -> jump_to_spoke
+#                                                         -> keyvault private endpoint
+#
+# It costs a minute of wall-clock time and removes the race.
 module "peering" {
   source = "../../modules/peering"
+
+  # Every subnet in the spoke must have finished its NSG/NAT association.
+  depends_on = [module.spoke_network]
 
   spoke_vnet_name           = module.spoke_network.vnet_name
   spoke_vnet_id             = module.spoke_network.vnet_id
@@ -140,6 +161,10 @@ module "jump_network" {
 
 module "peering_jump" {
   source = "../../modules/peering"
+
+  # The jump VNet's own subnet updates, and the spoke's hub peering: a VNet peers
+  # with the hub from both sides, and two peerings in flight at once is the race.
+  depends_on = [module.jump_network, module.peering]
 
   spoke_vnet_name           = module.jump_network.vnet_name
   spoke_vnet_id             = module.jump_network.vnet_id
@@ -206,6 +231,10 @@ module "peering_jump" {
 # private endpoint (which lives in the dev spoke). This direct peering gives the
 # jump VM a route to it. DNS still resolves via the hub resolver (jump↔hub).
 resource "azurerm_virtual_network_peering" "jump_to_spoke" {
+  # After the other direction: both VNets are mutated by this pair, so they go one
+  # at a time. See "Network operations are serialized" above.
+  depends_on = [azurerm_virtual_network_peering.spoke_to_jump]
+
   name                         = "peer-jump-to-dev-spoke"
   resource_group_name          = module.spoke_network.resource_group_name
   virtual_network_name         = module.jump_network.vnet_name
@@ -215,6 +244,9 @@ resource "azurerm_virtual_network_peering" "jump_to_spoke" {
 }
 
 resource "azurerm_virtual_network_peering" "spoke_to_jump" {
+  # Both VNets must be fully built and both hub peerings finished.
+  depends_on = [module.spoke_network, module.jump_network, module.peering_jump]
+
   name                         = "peer-dev-spoke-to-jump"
   resource_group_name          = module.spoke_network.resource_group_name
   virtual_network_name         = module.spoke_network.vnet_name
@@ -240,6 +272,10 @@ data "terraform_remote_state" "keyvault" {
 }
 
 resource "azurerm_private_endpoint" "keyvault" {
+  # Its NIC is created in snet-data-dev, which must not be mid-update. Waiting for
+  # the whole peering chain as well keeps the VNet quiet while the NIC attaches.
+  depends_on = [module.spoke_network, azurerm_virtual_network_peering.jump_to_spoke]
+
   name                = "pe-keyvault-${local.env}"
   resource_group_name = module.spoke_network.resource_group_name
   location            = var.location
