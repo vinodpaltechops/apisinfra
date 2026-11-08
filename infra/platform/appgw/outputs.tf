@@ -15,3 +15,8 @@ output "dns_record_instructions" {
   description = "Exactly what to enter in GoDaddy's DNS management page."
   value       = "GoDaddy → DNS → Add record: Type=A, Name=${split(".", var.app_fqdn)[0]}, Value=${module.appgw.public_ip}, TTL=600"
 }
+
+output "appgw_fqdn" {
+  description = "The primary gateway's hostname. This is what Traffic Manager targets: it cannot mix a hostname (the AGC endpoint) with a bare IP in one profile. appgw_public_ip stays for the A record and for debugging."
+  value       = module.appgw.public_fqdn
+}
