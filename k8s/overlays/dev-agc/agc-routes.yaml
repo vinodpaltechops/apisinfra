@@ -92,3 +92,29 @@ spec:
         statusCodes:
           - start: 200
             end: 299
+---
+# The AGC data plane is not a pod: it reaches workloads from its delegated subnet,
+# so the namespace's default-deny needs an explicit ipBlock door for it. This used
+# to be rendered by the platform's Gateway chart; it lives here now so the
+# platform deploys without this namespace and an app can be added or removed
+# without touching the platform.
+#
+# The range is the agc layer's subnet_address_prefix (infra/platform/agc,
+# output agc_subnet_cidr). Keep the two in sync: if the subnet moves, the gateway
+# is silently cut off from every pod while everything still reports Healthy,
+# because the Services have endpoints and the route is Accepted.
+#
+# Admits every pod and port in the namespace. AGC only forwards to Services that an
+# attached HTTPRoute names, so the route — not this policy — limits exposure.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-agc
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 10.1.5.0/24

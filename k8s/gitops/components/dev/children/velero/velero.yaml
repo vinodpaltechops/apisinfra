@@ -2,8 +2,9 @@
 #
 # An ApplicationSet, not an Application, so the Azure identifiers can come from
 # Terraform instead of being typed into Git. The cluster generator reads the
-# annotations that argocd-bootstrap writes onto this cluster's Argo CD secret
-# (from the velero layer's outputs) and renders them into the chart's values.
+# annotations that the gitops-deploy workflow writes onto this cluster's Argo CD
+# secret (from the velero layer's outputs, read when this component is deployed)
+# and renders them into the chart's values.
 # It yields exactly one Application, named `velero`.
 #
 # Sync wave -1 so this settles BEFORE the backup schedules (wave 0) that create

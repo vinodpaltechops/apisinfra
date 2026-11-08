@@ -1,0 +1,44 @@
+# Content Hub reached through the shared AGC Gateway.
+#
+# Adds the HTTPRoute, the health policies and the NetworkPolicy door for the AGC
+# subnet, labels the namespace so its routes may attach, and REMOVES the nginx
+# Ingress. Without that removal the app would also answer through ingress-nginx
+# whenever that component is deployed: two entrances for one app, and a second one
+# nobody chose.
+#
+# Needs the `agc` component (it installs the Gateway API CRDs these objects use).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: content-hub
+
+resources:
+- ../dev
+- agc-routes.yaml
+
+patches:
+# Lets this namespace's routes attach to the shared Gateway, whose listener only
+# accepts namespaces carrying this label.
+#
+# It is applied here for now because this repository still creates the namespace.
+# Once Content Hub moves to its own repository the PLATFORM should set it when it
+# creates the namespace — a tenant that can label its own namespace can grant
+# itself access, and that decision is not the tenant's to make.
+- patch: |
+    - op: add
+      path: /metadata/labels/gateway-access
+      value: shared
+  target:
+    kind: Namespace
+    name: content-hub
+
+# The nginx entrance is not wanted on this route.
+- patch: |
+    $patch: delete
+    apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: content-hub
+  target:
+    kind: Ingress
+    name: content-hub

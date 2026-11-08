@@ -13,6 +13,41 @@
 # instead of a public one. The AKS control-plane identity already holds Network
 # Contributor on the spoke VNet, so it can allocate that IP.
 
+# ── The platform contract (nginx) ─────────────────────────────────────────────
+# What an application needs to publish through this controller. The AGC
+# equivalent is the contract block in k8s/gitops/platform/agc-gateway/values.yaml.
+#
+#   Reachable   The controller itself is INTERNAL: a private load balancer at
+#               10.1.2.250 in snet-aks-user-dev, no public address. From inside the
+#               VNet (the mgmt VM, the jump network, peered networks) it is reachable
+#               directly. From the internet it is reachable ONLY through the App
+#               Gateway (infra/platform/appgw, behind a WAF), which forwards to that
+#               address. Keep it in step with the Service annotation below and with
+#               var.ingress_internal_ip in infra/platform/appgw.
+#   Declare     an Ingress with  ingressClassName: nginx-internal
+#   Hostnames   claim your own `host:`. A rule with no host is a catch-all for every
+#               name nobody else claimed, so at most one app should have one.
+#               Content Hub has one today, because it is reached by IP.
+#   Pods        a namespace with a default-deny needs a NetworkPolicy admitting the
+#               ingress-nginx namespace (kubernetes.io/metadata.name=ingress-nginx)
+#               on the app's ports. See allow-ingress-controller in
+#               k8s/base/networkpolicy.yaml.
+#   Namespace   no label or approval. Unlike the AGC Gateway, nothing gates which
+#               namespaces may publish: any namespace's Ingress is served, so any
+#               tenant can claim any host.
+#   TLS         none. Plain HTTP; apps set ssl-redirect "false". Terminating TLS here
+#               needs a certificate Secret per Ingress, which is not set up.
+#   Public?     Through the App Gateway, and only for ONE hostname: its listener is
+#               bound to app_fqdn (app.sometestdemo.in), so it fronts the same name
+#               AGC serves and no other. A second public nginx hostname needs that
+#               module changed. Traffic Manager ranks it above AGC and probes it on
+#               the app's own hostname, so it takes traffic only while an nginx app
+#               really answers there. WAF_v2 bills hourly whether or not one does.
+#
+# Choose by what the app needs. AGC is the public, managed entrance with an access
+# gate on who may publish. nginx is the private one, for internal services and for
+# apps or charts built around Ingress and nginx annotations.
+
 controller:
   # A distinct class name, not the default "nginx". Naming it for what it is
   # leaves room for a second, public controller later without a collision.

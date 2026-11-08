@@ -12,7 +12,9 @@
 ```
 k8s/
   base/                    namespace, 3 deployments+services, ingress, HPAs, network policies
-  overlays/dev/            pins the ACR registry + image tags, forces imagePullPolicy: Always
+  overlays/dev/            shared dev settings: ACR registry + image tags, imagePullPolicy: Always
+  overlays/dev-agc/        dev + the AGC route, health policies and NetworkPolicy door
+  overlays/dev-nginx/      dev reached through ingress-nginx (private LB; public only via the App Gateway)
   platform/                Helm values for the internal ingress controller
 ```
 
@@ -119,14 +121,14 @@ the private API FQDN.
 From the jump VM, with credentials loaded:
 
 ```bash
-kubectl apply -k k8s/overlays/dev
+kubectl apply -k k8s/overlays/dev-nginx    # or dev-agc; never both, they share resource names
 kubectl -n content-hub rollout status deploy/backend
 ```
 
 Locally you can render and inspect without a cluster:
 
 ```bash
-kubectl kustomize k8s/overlays/dev
+kubectl kustomize k8s/overlays/dev-nginx
 ```
 
 ## Resource budget

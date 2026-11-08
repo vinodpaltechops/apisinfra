@@ -1,0 +1,276 @@
+# GITOPS DEPLOY — put a platform component or an application onto the dev
+# cluster, or take it off again, one at a time and without touching anything else.
+#
+# argocd-bootstrap installs Argo CD and stops. Everything that runs on top is a
+# separate choice, made here whenever you want it:
+#
+#   components   k8s/gitops/components/dev/   agc, nginx, velero
+#   workloads    k8s/gitops/workloads/dev/    content-hub, and anything added later
+#
+# Give one name or several (agc,content-hub). Running it for a new name never
+# disturbs one that is already deployed, and each name is independent: deploying
+# nginx does not touch AGC.
+#
+#   deploy   apply the Argo CD Application in that file
+#   remove   delete it; Argo CD's finalizer cascades to everything it created
+#
+# The name is the FILE name (agc.yaml -> agc), which need not be the Application's
+# name inside it: remove deletes by what the file declares. Only files that exist
+# in those two directories are accepted, so this cannot delete anything else.
+#
+# ── Settings that come from Terraform ─────────────────────────────────────────
+# The AGC and Velero ApplicationSets fill their Helm values from annotations on
+# the cluster's Argo CD secret. argocd-bootstrap no longer writes those, because
+# it must work before either Terraform layer exists. This workflow writes them
+# for exactly the component being deployed, just before applying it, and fails
+# loudly if that layer has not been applied.
+#
+# ── Dependencies ──────────────────────────────────────────────────────────────
+# A manifest can declare what it needs with the annotation
+#   gitops.vinorg/requires: agc
+# (UX names, comma-separated). A deploy is refused unless each is in the same run
+# or already running. content-hub-agc declares agc because its HTTPRoute needs the
+# Gateway API CRDs that the ALB controller installs. Components are processed
+# before applications on deploy, and the reverse on remove.
+#
+# The opposite is
+#   gitops.vinorg/conflicts-with: content-hub-nginx
+# for two choices of the SAME thing that build the same resources (Content Hub
+# reached through AGC, or through nginx). A deploy is refused if the other is in
+# the same run or already running, because the two Applications would fight over
+# the same Deployments.
+#
+# Reaches the private cluster the same way argocd-bootstrap does, through
+# `az aks command invoke`: an ARM call, so the runner needs no route to the API.
+name: gitops-deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      names:
+        description: "What to act on, comma-separated: agc, nginx, velero, content-hub, ..."
+        required: true
+        default: agc
+        type: string
+      action:
+        description: "deploy = apply the Application; remove = delete it and everything it created"
+        type: choice
+        options: [deploy, remove]
+        default: deploy
+
+permissions:
+  id-token: write
+  contents: read
+
+# One at a time: two runs applying and deleting the same Application would race.
+concurrency:
+  group: gitops-deploy
+  cancel-in-progress: false
+
+env:
+  AKS_RESOURCE_GROUP: ${{ vars.AKS_RESOURCE_GROUP || 'rg-spoke-dev-vinorg-001' }}
+  AKS_CLUSTER_NAME: ${{ vars.AKS_CLUSTER_NAME || 'aks-dev-lab-001' }}
+  COMPONENT_DIR: k8s/gitops/components/dev
+  WORKLOAD_DIR: k8s/gitops/workloads/dev
+  ARGOCD_NAMESPACE: argocd
+  TF_VERSION: "1.9.8"
+
+jobs:
+  deploy:
+    name: ${{ inputs.action }} ${{ inputs.names }}
+    runs-on: ubuntu-latest
+    environment: production # attach required reviewers here to gate deploys
+    env:
+      # For reading Terraform outputs when a component needs them.
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ARM_SKIP_PROVIDER_REGISTRATION: "true"
+    steps:
+      # Manifests are read from the branch this run was started on, so a change
+      # can be tried from dev before it reaches main.
+      - uses: actions/checkout@v4
+
+      # Inputs reach the script through the environment, never interpolated into
+      # it: a name is shell-adjacent text from a person.
+      - name: Validate request
+        env:
+          NAMES_IN: ${{ inputs.names }}
+          ACTION: ${{ inputs.action }}
+        run: |
+          set -euo pipefail
+
+          list() { find "$1" -maxdepth 1 -name '*.yaml' -exec basename {} .yaml \; | sort | tr '\n' ' '; }
+
+          # lookup <name>: prints "<kind> <path>", or fails. A name in both
+          # directories is refused rather than guessed at.
+          lookup() {
+            local c="$COMPONENT_DIR/$1.yaml" w="$WORKLOAD_DIR/$1.yaml"
+            if [ -f "$c" ] && [ -f "$w" ]; then echo "::error::'$1' exists as both a component and a workload." >&2; return 1; fi
+            if [ -f "$c" ]; then echo "component $c"; return 0; fi
+            if [ -f "$w" ]; then echo "workload $w"; return 0; fi
+            echo "::error::unknown name '$1'. Components: $(list "$COMPONENT_DIR") | Workloads: $(list "$WORKLOAD_DIR")" >&2
+            return 1
+          }
+
+          components=(); workloads=(); seen=" "
+          IFS=',' read -ra requested <<< "$NAMES_IN"
+          for raw in "${requested[@]}"; do
+            name="$(echo "$raw" | xargs)"
+            [ -n "$name" ] || continue
+            if ! [[ "$name" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+              echo "::error::'$name' is not a valid name (lowercase letters, digits, hyphens)."; exit 1
+            fi
+            case "$seen" in *" $name "*) continue ;; esac   # named twice: do it once
+            seen="$seen$name "
+
+            read -r kind file < <(lookup "$name")
+            grep -qx 'kind: Application' "$file" || { echo "::error::$file is not an Argo CD Application."; exit 1; }
+
+            app="$(grep -m1 -E '^  name: ' "$file" | sed 's/^  name: *//')"
+            requires="$(grep -m1 'gitops.vinorg/requires:' "$file" | sed 's/.*requires: *//; s/"//g; s/ //g' || true)"
+            conflicts="$(grep -m1 'gitops.vinorg/conflicts-with:' "$file" | sed 's/.*conflicts-with: *//; s/"//g; s/ //g' || true)"
+            # '|' not a tab: `read` collapses runs of whitespace separators, so an
+            # empty `requires` before a non-empty `conflicts` would shift columns.
+            line="$name|$kind|$file|$app|$requires|$conflicts"
+            if [ "$kind" = component ]; then components+=("$line"); else workloads+=("$line"); fi
+          done
+
+          [ $(( ${#components[@]} + ${#workloads[@]} )) -gt 0 ] || { echo "::error::no names given."; exit 1; }
+
+          # Deploy: components first, so what an app needs exists before it.
+          # Remove: the reverse, so nothing is left pointing at a Gateway that is gone.
+          plan="$RUNNER_TEMP/plan.tsv"; : > "$plan"
+          if [ "$ACTION" = deploy ]; then ordered=("${components[@]:-}" "${workloads[@]:-}")
+          else ordered=("${workloads[@]:-}" "${components[@]:-}"); fi
+          for l in "${ordered[@]}"; do [ -n "$l" ] && echo "$l" >> "$plan"; done
+
+          echo "PLAN_FILE=$plan" >> "$GITHUB_ENV"
+          echo "Will $ACTION, in this order:"; cut -d'|' -f1,2,4 "$plan" | tr '|' ' ' | sed 's/^/  /'
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        if: ${{ inputs.action == 'deploy' }}
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false # so `terraform output -raw` returns the bare value
+
+      # `az aks command invoke` can exit 0 while the command inside it failed, and
+      # its output is the only place that shows. Read the command's own exit code
+      # from the JSON and fail on it, rather than trusting the CLI's.
+      - name: ${{ inputs.action }}
+        env:
+          ACTION: ${{ inputs.action }}
+        run: |
+          set -euo pipefail
+
+          kc() {
+            local out
+            out="$(az aks command invoke \
+              --resource-group "$AKS_RESOURCE_GROUP" --name "$AKS_CLUSTER_NAME" \
+              --command "$1" "${@:2}" -o json)"
+            echo "$out" | jq -r '.logs'
+            [ "$(echo "$out" | jq -r '.exitCode')" = "0" ]
+          }
+
+          # annotate <layer> <annotation>=<terraform output> ...
+          # Writes a layer's outputs onto the cluster secret that the component's
+          # ApplicationSet reads. Fails if the layer is not applied.
+          annotate() {
+            local layer="$1"; shift
+            terraform -chdir="$layer" init -input=false -backend-config=../../backend.json >/dev/null
+            local pairs=() pair key output val
+            for pair in "$@"; do
+              key="${pair%%=*}"; output="${pair#*=}"
+              val="$(terraform -chdir="$layer" output -raw "$output" 2>/dev/null)" || val=""
+              if [ -z "$val" ]; then
+                echo "::error::$layer has no output '$output'. Apply that layer first (terraform-deploy)."
+                exit 1
+              fi
+              pairs+=("$key='$val'")
+            done
+            echo "annotating cluster-in-cluster from $layer: $*"
+            kc "kubectl -n $ARGOCD_NAMESPACE annotate secret cluster-in-cluster --overwrite ${pairs[*]}"
+          }
+
+          app_running() { kc "kubectl -n $ARGOCD_NAMESPACE get application $1" >/dev/null 2>&1; }
+
+          kc "kubectl -n $ARGOCD_NAMESPACE get deploy argocd-server" >/dev/null || {
+            echo "::error::Argo CD is not installed on $AKS_CLUSTER_NAME. Run argocd-bootstrap first."
+            exit 1
+          }
+
+          names=" $(cut -d'|' -f1 "$PLAN_FILE" | tr '\n' ' ')"
+
+          # appname_of <name>: the Application a name resolves to, or empty.
+          appname_of() {
+            local f="$COMPONENT_DIR/$1.yaml"; [ -f "$f" ] || f="$WORKLOAD_DIR/$1.yaml"
+            [ -f "$f" ] && grep -m1 -E '^  name: ' "$f" | sed 's/^  name: *//' || true
+          }
+
+          # Refuse a deploy whose prerequisites are neither in this run nor running,
+          # or whose alternative is.
+          if [ "$ACTION" = deploy ]; then
+            while IFS='|' read -r name kind file app requires conflicts; do
+              for need in ${requires//,/ }; do
+                case "$names" in *" $need "*) continue ;; esac
+                needapp="$(appname_of "$need")"
+                if [ -z "$needapp" ] || ! app_running "$needapp"; then
+                  echo "::error::$name requires '$need', which is neither in this run nor deployed. Deploy it first, or name both: $need,$name"
+                  exit 1
+                fi
+              done
+              for other in ${conflicts//,/ }; do
+                case "$names" in *" $other "*)
+                  echo "::error::$name and $other cannot both be deployed: they create the same resources. Choose one."
+                  exit 1 ;;
+                esac
+                otherapp="$(appname_of "$other")"
+                if [ -n "$otherapp" ] && app_running "$otherapp"; then
+                  echo "::error::$name conflicts with '$other', which is already running. Remove $other first (action=remove), then deploy $name."
+                  exit 1
+                fi
+              done
+            done < "$PLAN_FILE"
+          fi
+
+          while IFS='|' read -r name kind file app requires conflicts; do
+            echo "::group::$ACTION $name ($kind -> Application $app)"
+            if [ "$ACTION" = deploy ]; then
+              case "$name" in
+                agc)
+                  kc "kubectl -n $ARGOCD_NAMESPACE get secret cluster-in-cluster" >/dev/null || { echo "::error::cluster secret missing. Run argocd-bootstrap first."; exit 1; }
+                  annotate infra/platform/agc albClientId=alb_identity_client_id agcId=agc_id agcFrontendName=frontend_name agcSubnetCidr=agc_subnet_cidr ;;
+                velero)
+                  kc "kubectl -n $ARGOCD_NAMESPACE get secret cluster-in-cluster" >/dev/null || { echo "::error::cluster secret missing. Run argocd-bootstrap first."; exit 1; }
+                  annotate infra/platform/velero veleroResourceGroup=resource_group_name veleroStorageAccount=storage_account_name veleroSubscriptionId=subscription_id veleroClientId=identity_client_id ;;
+              esac
+              cp "$file" "./$name.yaml"
+              kc "kubectl apply -f $name.yaml" --file "./$name.yaml"
+            else
+              # --wait lets the finalizer finish, so a stuck cascade fails this run
+              # instead of leaving a half-deleted component behind.
+              kc "kubectl -n $ARGOCD_NAMESPACE delete application $app --ignore-not-found --wait=true --timeout=5m"
+            fi
+            echo "::endgroup::"
+          done < "$PLAN_FILE"
+
+      - name: Report state
+        run: |
+          out="$(az aks command invoke \
+            --resource-group "$AKS_RESOURCE_GROUP" --name "$AKS_CLUSTER_NAME" \
+            --command "kubectl -n $ARGOCD_NAMESPACE get applications,applicationsets" -o json)"
+          echo "$out" | jq -r '.logs'
+          cat <<'EOF'
+
+          deploy only applies the Argo CD Application; Argo CD does the rollout, so
+          this goes green before the pods are Ready. If an application sits in
+          ImagePullBackOff the image tag in its overlay is not in ACR yet — run
+          app-deploy.
+          EOF

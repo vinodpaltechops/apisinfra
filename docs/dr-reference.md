@@ -446,7 +446,7 @@ you ever turn it on, note the module grants broad `Contributor` on each cluster'
 ### 6.2 The in-cluster half — why filesystem backup
 
 **Velero Helm chart `8.2.0`, pinned identically in both clusters**
-([apps/dev/velero.yaml](../k8s/gitops/apps/dev/velero.yaml#L25),
+([velero.yaml](../k8s/gitops/components/dev/children/velero/velero.yaml),
 [apps/dr/velero.yaml](../k8s/gitops/apps/dr/velero.yaml#L23)), plus
 `velero/velero-plugin-for-microsoft-azure:v1.11.1` loaded as an init container.
 The pin must match across regions: a backup written by one Kopia repository

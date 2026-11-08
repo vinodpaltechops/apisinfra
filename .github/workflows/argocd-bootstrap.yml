@@ -1,11 +1,25 @@
-# ARGOCD BOOTSTRAP — installs Argo CD and its root Application into ONE cluster.
+# ARGOCD BOOTSTRAP — installs Argo CD into ONE cluster.
 #
 # Run it once per cluster (dev, then dr). Idempotent, so re-running it upgrades
 # Argo CD in place; re-run it whenever you change
 # k8s/gitops/bootstrap/argocd-values.yaml.
 #
-# After this, nothing else is ever applied by hand: the root Application pulls
-# every other component from k8s/gitops/apps/<cluster>/.
+# ── What it does NOT do, on dev ───────────────────────────────────────────────
+# It deploys no AGC, no ingress-nginx, no Velero and no application. On dev it
+# installs Argo CD, registers the cluster, and gives Argo CD its repository
+# credential, and stops. Each of the rest is a separate, on-demand choice made
+# with the gitops-deploy workflow:
+#
+#   agc | nginx | velero      platform components   (k8s/gitops/components/dev)
+#   content-hub-agc | content-hub-nginx | ...
+#                             applications          (k8s/gitops/workloads/dev)
+#
+# Nothing here needs the agc or velero Terraform layers applied, so a cluster can
+# be bootstrapped without either.
+#
+# The DR cluster is different on purpose: it still applies root-dr, which syncs
+# the whole of k8s/gitops/apps/dr, because a warm standby has to converge on the
+# primary's workloads before an incident rather than during one.
 #
 # Reaches the private cluster the same way as aks-platform-bootstrap — through
 # `az aks command invoke`, which runs the command from a pod INSIDE the cluster.
@@ -36,11 +50,10 @@ permissions:
 env:
   ARGOCD_CHART_VERSION: "7.7.11" # Argo CD 2.13.x
   ARGOCD_NAMESPACE: argocd
-  # The velero layer holds the identity client id these clusters need.
+  # The velero layer holds the identity client id the DR cluster's Velero needs.
+  # Read only when bootstrapping dr: on dev, Velero is an on-demand component and
+  # gitops-deploy reads this layer when you deploy it.
   VELERO_LAYER: infra/platform/velero
-  # The agc layer holds the gateway ids and the ALB Controller's identity (dev
-  # only — the DR cluster has no Application Gateway for Containers).
-  AGC_LAYER: infra/platform/agc
 
 jobs:
   bootstrap:
@@ -66,7 +79,7 @@ jobs:
             dev)
               echo "AKS_RESOURCE_GROUP=${{ vars.AKS_RESOURCE_GROUP || 'rg-spoke-dev-vinorg-001' }}" >> "$GITHUB_ENV"
               echo "AKS_CLUSTER_NAME=${{ vars.AKS_CLUSTER_NAME || 'aks-dev-lab-001' }}"             >> "$GITHUB_ENV"
-              echo "ROOT_APP=k8s/gitops/bootstrap/root-app-dev.yaml"                                >> "$GITHUB_ENV"
+              # No ROOT_APP: dev has no root Application. See the header.
               ;;
             dr)
               echo "AKS_RESOURCE_GROUP=${{ vars.AKS_DR_RESOURCE_GROUP || 'rg-spoke-dr-vinorg-001' }}" >> "$GITHUB_ENV"
@@ -82,7 +95,7 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - uses: hashicorp/setup-terraform@v3
-        if: ${{ !inputs.uninstall }}
+        if: ${{ !inputs.uninstall && inputs.cluster == 'dr' }}
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
@@ -100,8 +113,8 @@ jobs:
           # Upload from the workspace root so both land in the run-command pod's
           # working directory under predictable basenames.
           cp k8s/gitops/bootstrap/argocd-values.yaml ./argocd-values.yaml
-          cp "$ROOT_APP" ./root-app.yaml
-          ls -l argo-cd-*.tgz argocd-values.yaml root-app.yaml
+          if [ -n "${ROOT_APP:-}" ]; then cp "$ROOT_APP" ./root-app.yaml; fi
+          ls -l argo-cd-*.tgz argocd-values.yaml
 
       # NOTE on quoting: everything inside --command runs in a shell in the
       # run-command pod, so a bare newline would terminate the command. Each
@@ -130,24 +143,28 @@ jobs:
       #
       # Declaring "in-cluster" explicitly replaces Argo CD's implicit entry for
       # it, which carries no annotations.
-      - name: Register cluster and Velero settings
+      - name: Register cluster
         if: ${{ !inputs.uninstall }}
         run: |
           set -euo pipefail
 
-          terraform -chdir="$VELERO_LAYER" init -input=false -backend-config=../../backend.json >/dev/null
-          out() { terraform -chdir="$VELERO_LAYER" output -raw "$1"; }
-
-          # AGC settings, dev cluster only. Same fail-loud rule as above: an
-          # unapplied agc layer stops the run here instead of installing an ALB
-          # Controller with an empty client id. The DR cluster gets none, and its
-          # ApplicationSets (there are none for AGC) would not select it anyway.
-          AGC_ANNOTATIONS=""
-          if [ "${{ inputs.cluster }}" = "dev" ]; then
-            terraform -chdir="$AGC_LAYER" init -input=false -backend-config=../../backend.json >/dev/null
-            agc() { terraform -chdir="$AGC_LAYER" output -raw "$1"; }
-            AGC_ANNOTATIONS="$(printf '    albClientId: "%s"\n    agcId: "%s"\n    agcFrontendName: "%s"\n    agcSubnetCidr: "%s"' \
-              "$(agc alb_identity_client_id)" "$(agc agc_id)" "$(agc frontend_name)" "$(agc agc_subnet_cidr)")"
+          # The label is what every ApplicationSet's cluster generator selects on.
+          # The annotations carry Azure identifiers from Terraform, and are
+          # written here ONLY for dr, whose root Application deploys Velero by
+          # itself and so needs them at once.
+          #
+          # On dev the secret goes in bare. The AGC and Velero components are
+          # on-demand, and gitops-deploy annotates this same secret with their
+          # outputs at the moment you deploy them — which is what lets this
+          # cluster be bootstrapped before either Terraform layer exists.
+          # `kubectl apply` leaves annotations it did not set alone, so re-running
+          # this does not wipe what gitops-deploy added.
+          ANNOTATIONS=""
+          if [ "${{ inputs.cluster }}" = "dr" ]; then
+            terraform -chdir="$VELERO_LAYER" init -input=false -backend-config=../../backend.json >/dev/null
+            out() { terraform -chdir="$VELERO_LAYER" output -raw "$1"; }
+            ANNOTATIONS="$(printf '    veleroResourceGroup: "%s"\n    veleroStorageAccount: "%s"\n    veleroSubscriptionId: "%s"\n    veleroClientId: "%s"' \
+              "$(out resource_group_name)" "$(out storage_account_name)" "$(out subscription_id)" "$(out identity_client_id)")"
           fi
 
           cat > cluster-secret.yaml <<YAML
@@ -160,20 +177,15 @@ jobs:
               argocd.argoproj.io/secret-type: cluster
               gitops.vinorg/cluster: ${{ inputs.cluster }}
             annotations:
-              veleroResourceGroup: "$(out resource_group_name)"
-              veleroStorageAccount: "$(out storage_account_name)"
-              veleroSubscriptionId: "$(out subscription_id)"
-              veleroClientId: "$(out identity_client_id)"
-          ${AGC_ANNOTATIONS}
+          ${ANNOTATIONS}
           stringData:
             name: in-cluster
             server: https://kubernetes.default.svc
             config: '{"tlsClientConfig":{"insecure":false}}'
           YAML
 
-          # Nothing secret in it, but print what was resolved: this is the one
-          # place to see what Velero will be configured with.
-          grep -A8 'annotations:' cluster-secret.yaml
+          # Nothing secret in it, but print what was resolved.
+          cat cluster-secret.yaml
 
           az aks command invoke \
             --resource-group "$AKS_RESOURCE_GROUP" \
@@ -248,26 +260,13 @@ jobs:
       # moment it exists, and without credentials in place its first sync fails
       # and it sits in a backoff you then have to wait out.
       - name: Apply root Application
-        if: ${{ !inputs.uninstall }}
+        if: ${{ !inputs.uninstall && inputs.cluster == 'dr' }}
         run: |
           az aks command invoke \
             --resource-group "$AKS_RESOURCE_GROUP" \
             --name "$AKS_CLUSTER_NAME" \
             --command "kubectl apply -f root-app.yaml" \
             --file root-app.yaml
-
-      # Second root Application: the AGC pieces, read from the feature branch
-      # (root-dev above only sees `main`). Dev cluster only. Remove this step
-      # when the branch is merged — see the header of root-app-agc-dev.yaml.
-      - name: Apply AGC root Application
-        if: ${{ !inputs.uninstall && inputs.cluster == 'dev' }}
-        run: |
-          cp k8s/gitops/bootstrap/root-app-agc-dev.yaml ./root-app-agc.yaml
-          az aks command invoke \
-            --resource-group "$AKS_RESOURCE_GROUP" \
-            --name "$AKS_CLUSTER_NAME" \
-            --command "kubectl apply -f root-app-agc.yaml" \
-            --file root-app-agc.yaml
 
       - name: Report state
         if: ${{ !inputs.uninstall }}

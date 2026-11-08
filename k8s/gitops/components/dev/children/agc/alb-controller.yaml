@@ -5,9 +5,9 @@
 # no traffic.
 #
 # An ApplicationSet, not an Application, for the same reason as velero.yaml: the
-# identity's client id is a Terraform output, read from the annotations that
-# argocd-bootstrap writes onto this cluster's Argo CD secret, so it never has to
-# be typed into Git.
+# identity's client id is a Terraform output, read from the annotations that the
+# gitops-deploy workflow writes onto this cluster's Argo CD secret when it
+# deploys this component, so it never has to be typed into Git.
 #
 # Sync wave -1: the controller must be running (and its CRDs and GatewayClass
 # installed) before the Gateway in agc-gateway.yaml (wave 0) is applied.
