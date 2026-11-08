@@ -26,9 +26,9 @@ variable "common_tags" {
 }
 
 variable "mgmt_ssh_source_prefix" {
-  description = "CIDR allowed to SSH into the public mgmt VM (your home/ISP public IP, e.g. 163.223.165.0/24). It's your only internet-facing door — keep it tight."
+  description = "Source allowed to SSH into the public mgmt VM: a CIDR (your ISP range) or the NSG service tag \"Internet\". It's the only internet-facing door; key-only auth is what protects it when open."
   type        = string
-  default     = "163.223.165.0/24"
+  default     = "Internet"
 }
 
 variable "keyvault_public_network_access_enabled" {

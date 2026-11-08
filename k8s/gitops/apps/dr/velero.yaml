@@ -1,48 +1,120 @@
 # Velero — DR cluster.
 #
-# Identical to the primary's Application except for the values file, which adds
-# the read-only BackupStorageLocation pointing at the primary's prefix.
+# An ApplicationSet, not an Application, so the Azure identifiers can come from
+# Terraform instead of being typed into Git. The cluster generator reads the
+# annotations that argocd-bootstrap writes onto this cluster's Argo CD secret
+# (from the velero layer's outputs) and renders them into the chart's values.
+# It yields exactly one Application, named `velero`.
+#
+# Identical to the primary's except for the values file and the storage
+# locations: this cluster adds a read-only one pointing at the primary's prefix.
+#
+# Sync wave -1: settles before the backup schedules (wave 0).
 apiVersion: argoproj.io/v1alpha1
-kind: Application
+kind: ApplicationSet
 metadata:
   name: velero
   namespace: argocd
   annotations:
     argocd.argoproj.io/sync-wave: "-1"
-  finalizers:
-    - resources-finalizer.argocd.argoproj.io
 spec:
-  project: default
+  goTemplate: true
+  # A missing annotation fails the render instead of producing an empty string:
+  # an empty storageAccount installs clean and every backup then fails.
+  goTemplateOptions: ["missingkey=error"]
 
-  sources:
-    - repoURL: https://vmware-tanzu.github.io/helm-charts
-      chart: velero
-      # MUST match the primary's pin — a backup written by one Kopia repository
-      # format is not guaranteed readable by a different one, and this cluster
-      # exists to read the primary's backups.
-      targetRevision: 8.2.0
-      helm:
-        releaseName: velero
-        valueFiles:
-          - $values/k8s/gitops/platform/velero/values-dr.yaml
-    - repoURL: https://github.com/vinodpaltechops/apisinfra.git
-      targetRevision: main
-      ref: values
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            gitops.vinorg/cluster: dr
 
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: velero
+  template:
+    metadata:
+      name: velero
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: default
 
-  syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
-    syncOptions:
-      - CreateNamespace=true
-      - ServerSideApply=true
-    retry:
-      limit: 3
-      backoff:
-        duration: 20s
-        factor: 2
-        maxDuration: 3m
+      sources:
+        - repoURL: https://vmware-tanzu.github.io/helm-charts
+          chart: velero
+          # MUST match the primary's pin — a backup written by one Kopia
+          # repository format is not guaranteed readable by a different one, and
+          # this cluster exists to read the primary's backups.
+          targetRevision: 8.2.0
+          helm:
+            releaseName: velero
+            valueFiles:
+              - $values/k8s/gitops/platform/velero/values-dr.yaml
+            # Applied over the values file. The storage location is the WHOLE
+            # list here because Helm replaces lists rather than merging them.
+            valuesObject:
+              serviceAccount:
+                server:
+                  annotations:
+                    # CLIENT id, not principal id — the wrong one fails token
+                    # exchange with AADSTS700016.
+                    azure.workload.identity/client-id: '{{ .metadata.annotations.veleroClientId }}'
+              configuration:
+                backupStorageLocation:
+                  # ── 1) This cluster's OWN backups ─────────────────────────
+                  # The DR cluster is warm, not idle, so its state is worth
+                  # protecting too. Distinct prefix, or the two Velero instances
+                  # each assume ownership of one Kopia repository and prune each
+                  # other's backups as expired.
+                  - name: default
+                    provider: azure
+                    bucket: velero
+                    prefix: dr/
+                    default: true
+                    config:
+                      resourceGroup: '{{ .metadata.annotations.veleroResourceGroup }}'
+                      storageAccount: '{{ .metadata.annotations.veleroStorageAccount }}'
+                      subscriptionId: '{{ .metadata.annotations.veleroSubscriptionId }}'
+                      useAAD: "true"
+
+                  # ── 2) The PRIMARY cluster's backups, READ-ONLY ───────────
+                  # The location a DR restore actually reads from: the DR
+                  # cluster sees primary backups directly, with no copy step.
+                  #
+                  # ReadOnly is load-bearing. Without it this Velero would treat
+                  # the primary's Kopia repository as its own and expire the
+                  # primary's backups against its own retention clock.
+                  - name: primary-readonly
+                    provider: azure
+                    bucket: velero
+                    prefix: primary/
+                    default: false
+                    accessMode: ReadOnly
+                    config:
+                      resourceGroup: '{{ .metadata.annotations.veleroResourceGroup }}'
+                      storageAccount: '{{ .metadata.annotations.veleroStorageAccount }}'
+                      subscriptionId: '{{ .metadata.annotations.veleroSubscriptionId }}'
+                      useAAD: "true"
+        - repoURL: https://github.com/vinodpaltechops/apisinfra.git
+          targetRevision: main
+          ref: values
+
+      destination:
+        server: https://kubernetes.default.svc
+        # MUST be "velero" — it forms half the federated credential subject
+        # (system:serviceaccount:velero:velero). Changing it silently breaks auth.
+        namespace: velero
+
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          # Velero's CRDs are large enough to exceed the 256KB annotation that
+          # client-side apply uses for last-applied-configuration.
+          - ServerSideApply=true
+        retry:
+          limit: 3
+          backoff:
+            duration: 20s
+            factor: 2
+            maxDuration: 3m

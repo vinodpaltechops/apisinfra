@@ -66,6 +66,35 @@ data "terraform_remote_state" "connectivity" {
   })
 }
 
+# The vault is created by the dev landing zone with a random name suffix, so its
+# URI and resource ID are read from that state rather than typed. try() keeps
+# this layer plannable before dev has been re-applied with the key_vault_id
+# output; the gateway module then reports the missing certificate source itself.
+data "terraform_remote_state" "dev" {
+  backend = "azurerm"
+  config = merge(local.tfstate_backend, {
+    container_name = "landing-zones-dev"
+    key            = "landing-zones-dev.tfstate"
+  })
+}
+
+locals {
+  dev_key_vault_id  = try(data.terraform_remote_state.dev.outputs.key_vault_id, null)
+  dev_key_vault_uri = try(data.terraform_remote_state.dev.outputs.key_vault_uri, null)
+
+  # Explicit variables win; otherwise the certificate comes from dev's vault,
+  # unless a PFX was supplied (a second source would fail the module's check).
+  use_vault_cert = var.enable_https && var.ssl_certificate_pfx_path == null
+
+  key_vault_id = local.use_vault_cert ? coalesce(var.key_vault_id, local.dev_key_vault_id) : null
+
+  # UNVERSIONED secret URL, so the gateway follows rotations by itself.
+  ssl_certificate_key_vault_secret_id = local.use_vault_cert ? coalesce(
+    var.ssl_certificate_key_vault_secret_id,
+    local.dev_key_vault_uri == null ? null : "${trimsuffix(local.dev_key_vault_uri, "/")}/secrets/${var.ssl_certificate_secret_name}",
+  ) : null
+}
+
 module "appgw" {
   source = "../../modules/appgw"
 
@@ -108,8 +137,8 @@ module "appgw" {
   # Getting the certificate INTO the vault stays a manual step (see
   # docs/public-endpoint.md) — no Terraform resource can complete a CA's domain
   # ownership challenge.
-  ssl_certificate_key_vault_secret_id = var.ssl_certificate_key_vault_secret_id
-  key_vault_id                        = var.key_vault_id
+  ssl_certificate_key_vault_secret_id = local.ssl_certificate_key_vault_secret_id
+  key_vault_id                        = local.key_vault_id
 
   ssl_certificate_pfx_path     = var.ssl_certificate_pfx_path
   ssl_certificate_pfx_password = var.ssl_certificate_pfx_password

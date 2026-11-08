@@ -66,8 +66,9 @@ allowed_source_prefixes = ["Internet"]
 enable_https           = false
 http_redirect_to_https = false
 
-ssl_certificate_key_vault_secret_id = "https://kv-dev-lab-o6xycn.vault.azure.net/secrets/app-tls"
-key_vault_id                        = "/subscriptions/9a80f875-0d94-48c9-9502-c7814477ffad/resourceGroups/rg-spoke-dev-vinorg-001/providers/Microsoft.KeyVault/vaults/kv-dev-lab-o6xycn"
+# The vault and secret URL are read from the dev landing zone's state, exactly
+# as in appgw.auto.tfvars — nothing to fill in. Flip enable_https here together
+# with the primary, and move Traffic Manager's probe to HTTPS at the same time.
 
 # Dedicated gateway subnet inside the DR spoke. 10.5.1-4.0/24 are the spoke's
 # own snet-* ranges, so the gateway takes .7 to mirror the hub's 10.0.7.0/24.

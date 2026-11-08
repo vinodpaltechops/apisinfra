@@ -42,14 +42,20 @@ variable "http_redirect_to_https" {
   default     = false
 }
 
+variable "ssl_certificate_secret_name" {
+  description = "Name of the certificate in the vault (the `--name` given to `az keyvault certificate import`). The full secret URL is built from the dev vault's URI plus this."
+  type        = string
+  default     = "app-tls"
+}
+
 variable "ssl_certificate_key_vault_secret_id" {
-  description = "UNVERSIONED Key Vault secret URL of the certificate — the SAME one the primary gateway uses. Unversioned so both gateways follow a rotation without a Terraform change."
+  description = "OPTIONAL override — by default built from the dev vault's URI and ssl_certificate_secret_name. UNVERSIONED Key Vault secret URL of the certificate — the SAME one the primary gateway uses. Unversioned so both gateways follow a rotation without a Terraform change."
   type        = string
   default     = null
 }
 
 variable "key_vault_id" {
-  description = "Resource ID of the dev spoke's vault. The module grants this gateway's own identity Key Vault Secrets User at this scope — separate from the primary gateway's assignment, so the two never collide."
+  description = "OPTIONAL override — by default taken from the dev landing zone's key_vault_id output. Resource ID of the dev spoke's vault. The module grants this gateway's own identity Key Vault Secrets User at this scope — separate from the primary gateway's assignment, so the two never collide."
   type        = string
   default     = null
 }

@@ -31,7 +31,7 @@ layer when you are not using it.
 
   ```bash
   az storage container create --name appgw \
-    --account-name stotfstatevinorg002 --auth-mode login
+    --account-name stotfstatevinorg003 --auth-mode login
   ```
 
 ## Step 1 — Set your hostname

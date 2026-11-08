@@ -36,6 +36,11 @@ output "mgmt_vm_identity_principal_id" {
   value       = module.linux_vm_mgmt.vm_principal_id
 }
 
+output "key_vault_id" {
+  description = "Resource ID of the vault. The gateway layers read it to grant their identities Key Vault Secrets User."
+  value       = module.keyvault.key_vault_id
+}
+
 output "key_vault_uri" {
   value = module.keyvault.key_vault_uri
 }

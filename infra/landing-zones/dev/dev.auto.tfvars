@@ -1,8 +1,15 @@
 # Committed + CI-loaded (see .gitignore `!*.auto.tfvars`). NO SECRETS here.
 # admin_password is NOT here — it comes from the GitHub secret
 # TF_VAR_ADMIN_PASSWORD (locally it stays in the gitignored terraform.tfvars).
-allowed_ip_rules       = ["163.223.165.0/24"] # your ISP range (KV secret seeding)
-mgmt_ssh_source_prefix = "163.223.165.0/24"   # SSH into the public mgmt VM
+# SSH is open to the internet on purpose: the laptop's ISP address changes, and
+# chasing it meant an edit and an apply on every re-lease. The VM takes SSH keys
+# only (disable_password_authentication = true), so what is exposed is a key
+# login, not a password prompt — expect brute-force noise in the auth log, none
+# of which can succeed without the private key.
+#
+# To lock it down again, set a CIDR here (e.g. your ISP's /24) and re-apply.
+allowed_ip_rules       = ["163.223.164.0/24"] # your ISP range (KV secret seeding)
+mgmt_ssh_source_prefix = "Internet"           # NSG service tag: any public address
 
 # Lets the mgmt VM's identity run `az keyvault certificate import` for the App
 # Gateway TLS cert (the vault is private, so that only works from inside the

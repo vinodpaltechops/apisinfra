@@ -90,16 +90,15 @@ gh workflow run argocd-bootstrap.yml -f cluster=dev
 gh workflow run argocd-bootstrap.yml -f cluster=dr
 ```
 
-The workflow refuses to run while `values-*.yaml` still holds the
-`REPLACE_WITH_VELERO_IDENTITY_CLIENT_ID` placeholder, and prints the value to
-paste. That guard exists because the failure it prevents is invisible: Argo CD
-happily syncs a Velero whose ServiceAccount carries a bogus client id, reports
-it Healthy, and every backup fails at "failed to get credentials".
+The workflow reads the velero layer's outputs (resource group, storage account,
+subscription id, identity client id) and writes them onto the cluster's Argo CD
+secret. `apps/<cluster>/velero.yaml` is an ApplicationSet that renders them into
+Velero's values, so none of them live in Git. Apply the velero layer first:
+`terraform output -raw` fails on an unapplied layer, which stops the run with the
+real reason instead of installing a Velero whose every backup fails at
+"failed to get credentials".
 
-```bash
-# get the real value
-terraform -chdir=infra/platform/velero output -raw identity_client_id
-```
+After a rename (new subscription, storage account, ...) just re-run the workflow.
 
 Both values files take the **same** client id — one identity federated into two
 clusters is what lets the DR cluster read backups the primary wrote.

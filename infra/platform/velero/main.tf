@@ -92,6 +92,13 @@ data "azurerm_client_config" "current" {}
 # -backend-config, so the name lives in exactly one place.
 locals {
   tfstate_backend = jsondecode(file("${path.module}/../../backend.json"))
+
+  # Same naming scheme, same suffix: bumping backend.json past a taken name
+  # moves the backup store with it.
+  storage_account_name = coalesce(
+    var.storage_account_name,
+    replace(local.tfstate_backend.storage_account_name, "stotfstate", "stovelero"),
+  )
 }
 
 data "terraform_remote_state" "dev" {
@@ -127,7 +134,7 @@ resource "azurerm_resource_group" "velero" {
 module "velero_backend" {
   source = "../../modules/velero-backend"
 
-  storage_account_name = var.storage_account_name
+  storage_account_name = local.storage_account_name
   resource_group_name  = azurerm_resource_group.velero.name
 
   # PRIMARY region. Geo-replication places the secondary in southindia's Azure
