@@ -76,24 +76,51 @@ locals {
   # literals: a rebuild changes the address, and a stale literal here sends every
   # user to a name Azure has since handed to someone else.
   #
-  # The primary is the AGC frontend. It is a HOSTNAME, not an IP — AGC exposes no
-  # public address — and Traffic Manager's external endpoint accepts either. The
-  # DR endpoint is still the DR App Gateway's IP until DR moves to AGC too.
+  # Two live entrances, for the SAME hostname, and the endpoint that actually
+  # serves the app wins on its own:
   #
-  # Static keys ("primary"/"dr"); only the values are apply-time unknowns.
+  #   appgw    App Gateway -> internal ingress-nginx.  Probed on the APP's hostname,
+  #            so it reads Online only while an nginx app answers there.
+  #   primary  the AGC frontend (a HOSTNAME, not an IP: AGC exposes no public
+  #            address, and an external endpoint accepts either). Probed on the
+  #            platform health host, so it reads Online whenever the gateway is up,
+  #            app or no app.
+  #
+  # That asymmetry is why the order matters. AGC is always Online, so if it ranked
+  # first it would take every query even when the app is only deployed behind
+  # nginx, and the App Gateway would never be asked. App Gateway first means: app
+  # on nginx -> it is Online -> it wins; app on AGC -> it is Degraded -> AGC
+  # answers. Content Hub's two variants cannot run together, so exactly one holds.
+  #
+  # This is a limit, not a feature: the App Gateway listener is bound to ONE
+  # hostname (app_fqdn), so it can only ever front the same name AGC serves.
+  #
+  # The DR endpoint is still the DR App Gateway's IP until DR moves to AGC too.
+  #
+  # Static keys ("appgw"/"primary"/"dr"); only the values are apply-time unknowns.
   endpoints = merge(
+    var.enable_appgw_endpoint ? {
+      appgw = {
+        target            = data.terraform_remote_state.appgw[0].outputs.appgw_public_ip
+        priority          = var.appgw_priority
+        location          = var.primary_location
+        enabled           = true
+        probe_host_header = var.app_fqdn
+      }
+    } : {},
     {
       primary = {
         target   = data.terraform_remote_state.agc.outputs.frontend_fqdn
-        priority = 1 # takes ALL traffic while healthy
+        priority = var.agc_priority
         location = var.primary_location
         enabled  = true
+        # no override: inherits the profile's platform health host
       }
     },
     var.enable_dr_endpoint ? {
       dr = {
         target   = data.terraform_remote_state.appgw_dr[0].outputs.appgw_public_ip
-        priority = 2 # standby — answers queries only when priority 1 fails its probe
+        priority = var.dr_priority # last resort — answers only when everything above fails its probe
         location = var.dr_location
         enabled  = true
       }
@@ -106,6 +133,19 @@ data "terraform_remote_state" "agc" {
   config = merge(local.tfstate_backend, {
     container_name = "agc"
     key            = "agc.tfstate"
+  })
+}
+
+# count, so this layer can run without the App Gateway layer — an unconditional
+# read of a state file that was never written fails at plan, and that layer is
+# optional (terraform-deploy.yml, job appgw).
+data "terraform_remote_state" "appgw" {
+  count = var.enable_appgw_endpoint ? 1 : 0
+
+  backend = "azurerm"
+  config = merge(local.tfstate_backend, {
+    container_name = "appgw"
+    key            = "appgw.tfstate"
   })
 }
 

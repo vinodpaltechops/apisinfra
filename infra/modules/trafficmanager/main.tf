@@ -153,4 +153,15 @@ resource "azurerm_traffic_manager_external_endpoint" "this" {
   # latency. Recorded anyway — it is the only place the endpoint's region is
   # visible in the profile, and it costs nothing under Priority.
   endpoint_location = each.value.location
+
+  # A per-endpoint header REPLACES the profile-level one for this endpoint's
+  # probe; without it the endpoint inherits the profile's. See probe_host_header on
+  # the endpoints variable for why the two entrances need different ones.
+  dynamic "custom_header" {
+    for_each = each.value.probe_host_header == null ? [] : [each.value.probe_host_header]
+    content {
+      name  = "host"
+      value = custom_header.value
+    }
+  }
 }

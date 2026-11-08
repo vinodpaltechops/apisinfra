@@ -1,4 +1,11 @@
-# Internal ingress controller — PRIMARY cluster.
+# Internal ingress controller — PRIMARY cluster. OPTIONAL: a component, not part
+# of the platform bootstrap.
+#
+# Not read by any root Application, so argocd-bootstrap never deploys it. Deploy
+# or remove it on demand with the gitops-deploy workflow (name: nginx). Nothing
+# else in the platform needs it. It is the controller for the plain Ingress
+# objects, such as the one content-hub-nginx carries, and its load balancer is
+# private: the internet reaches it only through the App Gateway layer.
 #
 # Replaces the one-shot `aks-platform-bootstrap` workflow for this cluster: the
 # same chart, the same values file, now reconciled continuously instead of

@@ -29,9 +29,13 @@ gateway:
   accessLabel: gateway-access
   accessValue: shared
 
-# Namespaces that receive the AGC NetworkPolicy door. One line per tenant.
-tenantNamespaces:
-  - content-hub
+# Namespaces that receive the AGC NetworkPolicy door from THIS chart. Empty on
+# purpose: the platform deploys with no application, and listing a namespace that
+# does not exist fails that object's sync and leaves the Gateway Application
+# degraded for no reason. An application that is deployed on demand (Content Hub)
+# carries its own allow-agc policy in its manifests instead, using agc_subnet_cidr
+# from the contract. Use this list only for a namespace the platform itself owns.
+tenantNamespaces: []
 
 # Platform-owned probe target. Traffic Manager sends this as the Host header
 # (infra/platform/trafficmanager: health_hostname) — the two must match, and

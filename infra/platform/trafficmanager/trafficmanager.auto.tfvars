@@ -19,6 +19,26 @@ health_hostname = "health.sometestdemo.in"
 primary_location = "centralindia"
 dr_location      = "indiasouthcentral"
 
+# ── Two live entrances for app_fqdn ───────────────────────────────────────────
+# appgw  App Gateway in front of the internal ingress-nginx.  Probed on app_fqdn,
+#        so it is Online only while an nginx app answers there.
+# agc    The AGC Gateway.  Probed on health_hostname, so it is Online whenever the
+#        gateway is up, with or without an app.
+#
+# The App Gateway ranks FIRST on purpose. AGC is always Online, so ranked first it
+# would take every query even when the app is deployed behind nginx and the App
+# Gateway would never be asked. With App Gateway first, whichever entrance really
+# serves the app wins by itself: nginx app -> App Gateway; AGC app -> App Gateway
+# reads Degraded and AGC answers. Content Hub's two variants cannot run together,
+# so exactly one is true.
+#
+# The App Gateway listener is bound to ONE hostname, so it can only front app_fqdn.
+# Set false together with the appgw job in terraform-deploy.yml.
+enable_appgw_endpoint = true
+appgw_priority        = 1
+agc_priority          = 2
+dr_priority           = 3
+
 # Set false to run with the primary endpoint only — either before the DR region
 # exists, or to park DR without destroying the profile. Neither is user-visible;
 # the endpoint keeps serving from the primary.

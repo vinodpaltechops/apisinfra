@@ -2,9 +2,12 @@
 
 ```
 k8s/gitops/
-  bootstrap/            argocd Helm values + the ONE manifest applied by hand
-  apps/dev/             child Applications for the PRIMARY cluster
-  apps/dr/              child Applications for the DR cluster
+  bootstrap/            argocd Helm values + the DR root Application
+  components/dev/       platform components for the PRIMARY cluster, ON DEMAND:
+                        agc, nginx, velero (no root app reads this)
+  workloads/dev/        applications for the PRIMARY cluster, ON DEMAND:
+                        content-hub, ...   (no root app reads this either)
+  apps/dr/              child Applications for the DR cluster (auto-synced)
   platform/velero/      Velero Helm values, one per cluster
   platform/backup-schedules/
     base/               Velero Schedule CRs
@@ -16,10 +19,15 @@ k8s/gitops/
 There is **no hub**. Each cluster runs its own Argo CD, syncing this same repo
 at a different path:
 
-| Cluster           | Region        | Root app          | Reads from          |
-| ----------------- | ------------- | ----------------- | ------------------- |
-| `aks-dev-lab-001` | southindia    | `root-app-dev`    | `k8s/gitops/apps/dev` |
-| `aks-dr-lab-001`  | indiasouthcentral | `root-app-dr`     | `k8s/gitops/apps/dr`  |
+| Cluster           | Region        | What deploys things                         | Reads from          |
+| ----------------- | ------------- | ------------------------------------------- | ------------------- |
+| `aks-dev-lab-001` | centralindia  | nothing automatically — `gitops-deploy`, on demand | `components/dev`, `workloads/dev` |
+| `aks-dr-lab-001`  | indiasouthcentral | `root-app-dr`, automatically            | `k8s/gitops/apps/dr`  |
+
+The two clusters are deliberately different. The primary is a platform you
+assemble piece by piece. The DR cluster is a warm standby, so it keeps a root
+Application that converges on the primary's workloads by itself: a standby that
+has to be told what to run is not warm.
 
 The usual design — one Argo CD managing both clusters — was rejected for two
 reasons, and both matter more than the operational convenience it buys:
@@ -71,12 +79,31 @@ write is a token that can rewrite your desired state from inside the cluster.
 uploads it as a file, so the token is never committed and never appears in a
 command line. The workflow fails fast with instructions if the secret is unset.
 
-### Prerequisite: images must exist
+### Everything else is a separate step
 
-Argo CD syncs `content-hub` from the overlays, which pin an immutable image tag.
-If ACR has no image at that tag the app lands in `ImagePullBackOff` and stays
-there. Run `app-deploy` first — note that a rebuilt ACR is EMPTY even though the
-pinned tag is still in Git, because the images died with the old registry.
+On dev, `argocd-bootstrap` installs **Argo CD and nothing else** — no AGC, no
+ingress-nginx, no Velero, no application. Each is a separate choice made with the
+`gitops-deploy` workflow, any time after:
+
+| Name | Kind | Deploys |
+| --- | --- | --- |
+| `agc` | component | ALB controller + the shared Gateway + its health route |
+| `nginx` | component | ingress-nginx |
+| `velero` | component | Velero + the backup schedules |
+| `content-hub-agc` | workload | Content Hub through the AGC Gateway (requires `agc`) |
+| `content-hub-nginx` | workload | Content Hub through nginx, public via the App Gateway (requires `nginx`) |
+
+See [components/README.md](components/README.md) and
+[workloads/README.md](workloads/README.md). Bootstrap needs neither the `agc` nor
+the `velero` Terraform layer: `gitops-deploy` reads a layer's outputs when you
+deploy that component, and says so if the layer is not applied.
+
+### Prerequisite for deploying Content Hub: images must exist
+
+`content-hub` syncs from the overlays, which pin an immutable image tag. If ACR
+has no image at that tag the app lands in `ImagePullBackOff` and stays there. Run
+`app-deploy` first — note that a rebuilt ACR is EMPTY even though the pinned tag
+is still in Git, because the images died with the old registry.
 
 ```bash
 az acr repository list -n acrdevvinorg001 -o tsv    # must not be empty
@@ -85,20 +112,30 @@ az acr repository list -n acrdevvinorg001 -o tsv    # must not be empty
 ### Run it
 
 ```bash
-# once per cluster — installs Argo CD, the repo credential, and the root app
+# once per cluster — installs Argo CD and the repo credential
 gh workflow run argocd-bootstrap.yml -f cluster=dev
 gh workflow run argocd-bootstrap.yml -f cluster=dr
+
+# then, on dev, whatever you want on top — separately, in any order you like
+gh workflow run gitops-deploy.yml -f names=agc
+gh workflow run gitops-deploy.yml -f names=velero
+gh workflow run gitops-deploy.yml -f names=nginx
+gh workflow run gitops-deploy.yml -f names=agc,content-hub-agc      # public, through AGC
+gh workflow run gitops-deploy.yml -f names=nginx,content-hub-nginx  # internal, through nginx
+gh workflow run gitops-deploy.yml -f names=content-hub-agc -f action=remove
 ```
 
-The workflow reads the velero layer's outputs (resource group, storage account,
-subscription id, identity client id) and writes them onto the cluster's Argo CD
-secret. `apps/<cluster>/velero.yaml` is an ApplicationSet that renders them into
-Velero's values, so none of them live in Git. Apply the velero layer first:
-`terraform output -raw` fails on an unapplied layer, which stops the run with the
-real reason instead of installing a Velero whose every backup fails at
-"failed to get credentials".
+The DR bootstrap is the exception: it still reads the velero layer's outputs
+(resource group, storage account, subscription id, identity client id), writes
+them onto the cluster's Argo CD secret, and applies `root-dr`, whose
+`apps/dr/velero.yaml` ApplicationSet renders them into Velero's values. Apply the
+velero layer first: `terraform output -raw` fails on an unapplied layer, which
+stops the run with the real reason instead of installing a Velero whose every
+backup fails at "failed to get credentials".
 
-After a rename (new subscription, storage account, ...) just re-run the workflow.
+On dev the same outputs are written by `gitops-deploy` when you deploy `velero`
+(or `agc`, for the AGC ones). After a rename (new subscription, storage account,
+...) re-run it for that component.
 
 Both values files take the **same** client id — one identity federated into two
 clusters is what lets the DR cluster read backups the primary wrote.

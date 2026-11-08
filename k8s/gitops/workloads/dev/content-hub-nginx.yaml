@@ -1,0 +1,86 @@
+# Content Hub — PRIMARY cluster, reached through ingress-nginx. OPTIONAL.
+#
+# One of two choices for the SAME app. The other is content-hub-agc; they build the same
+# Deployments and Services in the same namespace, so only ONE may be deployed.
+# gitops-deploy refuses to deploy this while content-hub-agc is in the run or running
+# (gitops.vinorg/conflicts-with below).
+#
+# This file lives in k8s/gitops/workloads/, which no root Application reads, so
+# argocd-bootstrap never deploys it. Deploy or remove it on demand with the
+# gitops-deploy workflow (see k8s/gitops/workloads/README.md).
+#
+# Once applied, this Application is what makes Argo CD, rather than the pipeline,
+# the thing that puts images on the cluster. app-deploy builds, pushes, and
+# commits a new tag into k8s/overlays/dev/kustomization.yaml, which both entrance
+# overlays build on; Argo CD notices the commit and rolls it out. It needs images
+# to exist in ACR first, so run app-deploy before deploying this, or the pods sit
+# in ImagePullBackOff until a tag lands.
+#
+# Switching entrance is remove one, then deploy the other. The app restarts and is
+# briefly unreachable: nothing carries over between the two Applications.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: content-hub-nginx
+  namespace: argocd
+  annotations:
+    # Read by gitops-deploy.
+    #
+    # requires: refuses a deploy unless nginx is in the same run or already
+    # running. The Ingress is validated by the controller's admission webhook, and does
+    # nothing without the controller. nginx's load balancer is private, so from the
+    # internet this is reachable only through the App Gateway (app_fqdn alone).
+    gitops.vinorg/requires: nginx
+    # conflicts-with: refuses a deploy while the other entrance is in the run or
+    # running.
+    gitops.vinorg/conflicts-with: content-hub-agc
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/vinodpaltechops/apisinfra.git
+    # The `dev` branch: changes are proven on the dev cluster first and only then
+    # merged to main. Back to `main` when that flow is retired.
+    #
+    # Two things must hold or this app breaks, both because the image tag lives
+    # in the shared overlay this path builds on (k8s/overlays/dev):
+    #   • dev must carry a tag that exists in ACR. A rebuilt registry is empty, so
+    #     a stale tag on this branch is ImagePullBackOff, not a no-op.
+    #   • app-deploy commits each new tag to the branch that triggered the run, so
+    #     a build started from `dev` keeps `dev` current. A build from `main`
+    #     reaches this branch only when main is merged into it.
+    targetRevision: dev
+    path: k8s/overlays/dev-nginx
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: content-hub
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      # AcrPull role assignments take a minute or two to propagate, so the very
+      # first sync after a fresh `terraform apply` can land in ImagePullBackOff
+      # and time out. This rides that out — the equivalent of the 300s rollout
+      # timeout the old pipeline used.
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m
+
+  # HPAs own replica counts, so a Deployment's `replicas` field drifts from Git
+  # by design. Without this, Argo CD reports the app permanently OutOfSync and
+  # selfHeal fights the autoscaler — scaling the app back down every reconcile,
+  # under exactly the load that made it scale up.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas

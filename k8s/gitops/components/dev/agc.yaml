@@ -1,0 +1,55 @@
+# COMPONENT: Application Gateway for Containers — the ALB controller and the shared Gateway.
+#
+# NOT part of argocd-bootstrap. No root Application reads k8s/gitops/components/,
+# so a fresh cluster gets Argo CD and nothing else. Deploy or remove this on
+# demand with the gitops-deploy workflow (see k8s/gitops/components/README.md).
+#
+# Children (k8s/gitops/components/dev/children/agc), in sync-wave order:
+#   -2  repo-mcr         the registry credential the controller's OCI chart needs
+#   -1  alb-controller   the controller; installs the Gateway API CRDs
+#    0  agc-gateway      the shared Gateway, the health route, the health responder
+#
+# Needs the agc Terraform layer applied: the gitops-deploy workflow reads that
+# layer's outputs (AGC id, frontend name, subnet range, the controller's identity)
+# and annotates the cluster secret with them BEFORE applying this, because the
+# agc-gateway ApplicationSet fills its Helm values from those annotations.
+#
+# This is a wrapper Application over the directory of children below it, rather
+# than the children being applied one by one. The children depend on each other's
+# sync waves (a CRD must exist before the thing that uses it), and waves only
+# order resources inside ONE Argo CD sync. Applying the files separately with
+# kubectl would create them all at once and leave the ordering to retries.
+#
+# Removing it cascades: the finalizer deletes every child and, through each
+# child's own finalizer, everything they created.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: component-agc
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/vinodpaltechops/apisinfra.git
+    # `dev`: changes are proven on the dev cluster first and only then merged to
+    # main. Back to `main` when that flow is retired.
+    targetRevision: dev
+    path: k8s/gitops/components/dev/children/agc
+    directory:
+      recurse: true
+
+  destination:
+    # Always in-cluster. Each Argo CD manages only the cluster it runs in.
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

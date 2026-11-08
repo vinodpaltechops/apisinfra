@@ -1,0 +1,21 @@
+# Content Hub reached through the internal ingress-nginx.
+#
+# Nothing to add: the base already carries the Ingress (class nginx-internal) and
+# the NetworkPolicy that admits the ingress-nginx namespace. This overlay exists so
+# that choosing nginx is a named, symmetrical choice next to ../dev-agc, and so the
+# AGC objects are provably absent from it.
+#
+# ingress-nginx has only a private load balancer (10.1.2.250). From inside the VNet
+# (the mgmt VM, the jump network) the app is reachable directly. From the internet
+# it is reachable only through the App Gateway, for app.sometestdemo.in alone, and
+# only if the appgw layer is deployed. See the nginx contract in
+# k8s/platform/ingress-nginx-values.yaml.
+#
+# Needs the `nginx` component: the Ingress is validated by its admission webhook.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: content-hub
+
+resources:
+- ../dev

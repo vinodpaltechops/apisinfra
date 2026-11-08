@@ -1,0 +1,54 @@
+# COMPONENT: Velero — cluster backups, and the schedules that use them.
+#
+# NOT part of argocd-bootstrap. No root Application reads k8s/gitops/components/,
+# so a fresh cluster gets Argo CD and nothing else. Deploy or remove this on
+# demand with the gitops-deploy workflow (see k8s/gitops/components/README.md).
+#
+# Children (k8s/gitops/components/dev/children/velero), in sync-wave order:
+#   -1  velero             the ApplicationSet that installs Velero and its CRDs
+#    0  backup-schedules   the Schedule CRs, which fail without those CRDs
+#
+# Needs the velero Terraform layer applied (the backup store and its identity).
+# The gitops-deploy workflow reads that layer's outputs and annotates the cluster
+# secret with them BEFORE applying this, because the velero ApplicationSet fills
+# its Helm values from those annotations.
+#
+# This is a wrapper Application over the directory of children below it, rather
+# than the children being applied one by one. The children depend on each other's
+# sync waves (a CRD must exist before the thing that uses it), and waves only
+# order resources inside ONE Argo CD sync. Applying the files separately with
+# kubectl would create them all at once and leave the ordering to retries.
+#
+# Removing it cascades: the finalizer deletes every child and, through each
+# child's own finalizer, everything they created.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: component-velero
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/vinodpaltechops/apisinfra.git
+    # `dev`: changes are proven on the dev cluster first and only then merged to
+    # main. Back to `main` when that flow is retired.
+    targetRevision: dev
+    path: k8s/gitops/components/dev/children/velero
+    directory:
+      recurse: true
+
+  destination:
+    # Always in-cluster. Each Argo CD manages only the cluster it runs in.
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

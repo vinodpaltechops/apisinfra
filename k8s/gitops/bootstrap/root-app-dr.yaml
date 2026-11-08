@@ -1,8 +1,12 @@
 # ROOT APPLICATION (app-of-apps) — DR cluster, aks-dr-lab-001.
 #
-# Identical to root-app-dev.yaml except for `path`. That single-line difference
-# is the entire multi-cluster design: two independent Argo CD instances, one
-# repo, two directories.
+# The DR cluster's only root Application. The dev cluster has none: its platform
+# components and applications are deployed on demand (k8s/gitops/components and
+# k8s/gitops/workloads), because dev is a platform you assemble. DR is a warm
+# standby and must converge on the primary's workloads by itself, so it keeps a
+# root app that syncs the whole of k8s/gitops/apps/dr.
+#
+# Two independent Argo CD instances, one repo, no hub.
 #
 # Because this cluster converges on the repo by itself, a failover requires no
 # deployment action. The DR cluster is already running the same commit as the

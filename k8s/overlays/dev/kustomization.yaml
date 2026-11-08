@@ -1,3 +1,13 @@
+# SHARED dev settings for Content Hub: the image pins and the pull policy. It
+# declares no entrance and is not deployed directly. Content Hub reaches the
+# outside world by one of two routes, each its own overlay built on this one:
+#
+#   ../dev-agc     the shared AGC Gateway (HTTPRoute)      workload content-hub-agc
+#   ../dev-nginx   the internal ingress-nginx (Ingress)    workload content-hub-nginx
+#
+# The image tags live HERE and only here, so app-deploy's `kustomize edit set
+# image` in this directory updates both routes at once and needs to know about
+# neither.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -5,8 +15,6 @@ namespace: content-hub
 
 resources:
 - ../../base
-# The AGC route and health policies. Dev only: DR is fronted by ingress-nginx.
-- agc-routes.yaml
 
 # The registry name comes from the dev landing zone's `acr_login_server` output.
 # CI overwrites the tags in place with:
@@ -34,18 +42,3 @@ patches:
       value: Always
   target:
     kind: Deployment
-
-# Lets this namespace's routes attach to the shared Gateway, whose listener only
-# accepts namespaces carrying this label. Dev only, as above.
-#
-# It is applied here for now because this repository still creates the namespace.
-# Once Content Hub moves to its own repository the PLATFORM should set it when it
-# creates the namespace — a tenant that can label its own namespace can grant
-# itself access, and that decision is not the tenant's to make.
-- patch: |
-    - op: add
-      path: /metadata/labels/gateway-access
-      value: shared
-  target:
-    kind: Namespace
-    name: content-hub

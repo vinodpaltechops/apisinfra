@@ -31,6 +31,13 @@ variable "endpoints" {
     priority = number
     location = string
     enabled  = optional(bool, true)
+
+    # The Host header THIS endpoint's probe sends, overriding the profile's
+    # probe_host_header. Needed when entrances route differently: the AGC endpoint
+    # is probed on a platform health host that exists whether or not any app is
+    # deployed, while the App Gateway endpoint must be probed on the app's own
+    # hostname, because that is the only name its listener answers. Null = inherit.
+    probe_host_header = optional(string)
   }))
 
   validation {

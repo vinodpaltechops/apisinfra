@@ -35,11 +35,9 @@ spec:
 
       source:
         repoURL: https://github.com/vinodpaltechops/apisinfra.git
-        # `dev`, the same branch content-hub and root-dev read, so the chart and
-        # the app's HTTPRoute that attaches to it always move together. Split
-        # across two branches, the Gateway could be swapped while the route that
-        # needs it still sat on the other. Back to `main` once dev is merged — see
-        # k8s/gitops/bootstrap/root-app-agc-dev.yaml.
+        # `dev`, the same branch as the wrapper Application that deploys this
+        # (k8s/gitops/components/dev/agc.yaml), so the pieces move together.
+        # Back to `main` once dev is merged.
         targetRevision: dev
         path: k8s/gitops/platform/agc-gateway
         helm:
