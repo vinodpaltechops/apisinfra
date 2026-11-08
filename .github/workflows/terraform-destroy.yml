@@ -133,9 +133,9 @@ jobs:
   # 1) Application Gateway — the outermost of the original layers, and it holds
   #    a subnet inside the hub VNet which connectivity cannot delete while that
   #    subnet is still in use.
-  # KEPT although terraform-deploy no longer creates this gateway (AGC replaced
-  # it): a teardown must still remove one deployed earlier. Against an empty
-  # state it is a no-op, and it can be dropped once nothing deployed one.
+  # Destroyed after trafficmanager, which reads its state for an endpoint and
+  # cannot plan once that state is empty. Against an empty state (the layer was
+  # never applied, or the job is disabled in terraform-deploy) it is a no-op.
   appgw:
     needs: trafficmanager
     uses: ./.github/workflows/tf-layer.yml

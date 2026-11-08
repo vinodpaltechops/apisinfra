@@ -40,6 +40,36 @@ variable "health_hostname" {
   type        = string
 }
 
+variable "enable_appgw_endpoint" {
+  description = <<-EOT
+    Add the App Gateway (in front of the internal ingress-nginx) as an endpoint.
+
+    Turn it off together with the appgw job in terraform-deploy.yml: with it on,
+    this layer reads that layer's state and fails at plan if nothing wrote one.
+    With it off the profile is AGC-only, exactly as before.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "appgw_priority" {
+  description = "Lower is tried first. First by default: the AGC endpoint is always Online (it is probed on a platform health host), so it would shadow this one at any lower rank and the App Gateway would never be asked."
+  type        = number
+  default     = 1
+}
+
+variable "agc_priority" {
+  description = "The AGC endpoint's rank. Second by default: it answers when the App Gateway endpoint reads Degraded, which is whenever the app is not behind nginx."
+  type        = number
+  default     = 2
+}
+
+variable "dr_priority" {
+  description = "The DR endpoint's rank. Last: it answers only when everything above has failed its probe."
+  type        = number
+  default     = 3
+}
+
 variable "enable_dr_endpoint" {
   description = <<-EOT
     Add the DR gateway as the priority-2 endpoint.
