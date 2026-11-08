@@ -18,3 +18,8 @@ output "subnet_id" {
 output "waf_policy_id" {
   value = azurerm_web_application_firewall_policy.appgw.id
 }
+
+output "public_fqdn" {
+  description = "The gateway's hostname (<label>.<region>.cloudapp.azure.com). Use this, not public_ip, as a Traffic Manager target: the AGC endpoint is a hostname and a profile cannot mix the two."
+  value       = azurerm_public_ip.appgw.fqdn
+}

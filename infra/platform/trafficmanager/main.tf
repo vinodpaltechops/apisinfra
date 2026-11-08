@@ -80,7 +80,8 @@ locals {
   # serves the app wins on its own:
   #
   #   appgw    App Gateway -> internal ingress-nginx.  Probed on the APP's hostname,
-  #            so it reads Online only while an nginx app answers there.
+  #            so it reads Online only while an nginx app answers there. Targeted by
+  #            HOSTNAME, not IP, because a profile cannot mix the two (see below).
   #   primary  the AGC frontend (a HOSTNAME, not an IP: AGC exposes no public
   #            address, and an external endpoint accepts either). Probed on the
   #            platform health host, so it reads Online whenever the gateway is up,
@@ -95,13 +96,19 @@ locals {
   # This is a limit, not a feature: the App Gateway listener is bound to ONE
   # hostname (app_fqdn), so it can only ever front the same name AGC serves.
   #
-  # The DR endpoint is still the DR App Gateway's IP until DR moves to AGC too.
+  # EVERY target here is a hostname, and must stay one. Traffic Manager refuses a
+  # profile that mixes external endpoints of different target types (a hostname and
+  # a bare IP): "Cannot mix External Endpoints that have targets of different
+  # types, DomainName, IPv4Address". AGC has no IP to offer, so the App Gateways are
+  # reached by the DNS label on their public IPs. The DR endpoint is still the DR
+  # App Gateway, by hostname; its state needs appgw_fqdn, so apply appgw-dr again
+  # before enabling it if it was last applied before that output existed.
   #
   # Static keys ("appgw"/"primary"/"dr"); only the values are apply-time unknowns.
   endpoints = merge(
     var.enable_appgw_endpoint ? {
       appgw = {
-        target            = data.terraform_remote_state.appgw[0].outputs.appgw_public_ip
+        target            = data.terraform_remote_state.appgw[0].outputs.appgw_fqdn
         priority          = var.appgw_priority
         location          = var.primary_location
         enabled           = true
@@ -119,7 +126,7 @@ locals {
     },
     var.enable_dr_endpoint ? {
       dr = {
-        target   = data.terraform_remote_state.appgw_dr[0].outputs.appgw_public_ip
+        target   = data.terraform_remote_state.appgw_dr[0].outputs.appgw_fqdn
         priority = var.dr_priority # last resort — answers only when everything above fails its probe
         location = var.dr_location
         enabled  = true

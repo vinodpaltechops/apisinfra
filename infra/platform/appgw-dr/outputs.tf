@@ -10,3 +10,8 @@ output "appgw_name" {
 output "app_fqdn" {
   value = var.app_fqdn
 }
+
+output "appgw_fqdn" {
+  description = "The DR gateway's hostname. This is what Traffic Manager targets: it cannot mix a hostname (the AGC endpoint) with a bare IP in one profile. appgw_public_ip stays for the A record and for debugging."
+  value       = module.appgw.public_fqdn
+}

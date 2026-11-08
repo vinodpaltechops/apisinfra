@@ -159,12 +159,32 @@ resource "azurerm_subnet_network_security_group_association" "appgw" {
 # ── Public IP — must be Standard + Static for v2 ──────────────────────────────
 # Static matters beyond availability: the GoDaddy A record points at this
 # literal address, so it must survive restarts.
+# A DNS label gives the address a hostname, <label>.<region>.cloudapp.azure.com.
+#
+# Traffic Manager needs it. A profile cannot mix external endpoints whose targets
+# are of different types — a hostname and a bare IP are different types, and the
+# API refuses the second with "Cannot mix External Endpoints that have targets of
+# different types, DomainName, IPv4Address". The AGC frontend is only ever a
+# hostname, so this gateway has to be one too.
+#
+# The label is unique per REGION across every Azure customer, so the readable part
+# alone ("agw-dev-vinorg-001") could already be taken. The suffix is a hash of the
+# subscription id: deterministic, so a rebuild gets the SAME hostname and the
+# Traffic Manager endpoint does not churn, but different in every subscription.
+# It needs no random provider, whose state would change the hostname on a rebuild.
+data "azurerm_client_config" "current" {}
+
+locals {
+  dns_label = "${local.name}-${substr(md5(data.azurerm_client_config.current.subscription_id), 0, 6)}"
+}
+
 resource "azurerm_public_ip" "appgw" {
   name                = "pip-${local.name}"
   resource_group_name = var.hub_resource_group_name
   location            = var.location
   allocation_method   = "Static"
   sku                 = "Standard"
+  domain_name_label   = local.dns_label
   tags                = var.tags
 }
 
