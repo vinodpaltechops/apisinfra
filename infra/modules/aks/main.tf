@@ -79,8 +79,13 @@ resource "azurerm_kubernetes_cluster" "this" {
   private_cluster_public_fqdn_enabled = var.private_cluster_enabled ? false : null
   private_dns_zone_id                 = var.private_cluster_enabled ? var.aks_private_dns_zone_id : null
 
+  # Present on EVERY public cluster, even with an empty list. An empty list is
+  # how the filter is removed: leaving the block out does not clear ranges Azure
+  # already holds (the provider treats a missing block as "no opinion"), so
+  # dropping the last CIDR would silently keep the old filter. A private cluster
+  # never gets the block, because Azure rejects authorized ranges there.
   dynamic "api_server_access_profile" {
-    for_each = !var.private_cluster_enabled && length(var.api_server_authorized_ip_ranges) > 0 ? [1] : []
+    for_each = var.private_cluster_enabled ? [] : [1]
     content {
       authorized_ip_ranges = var.api_server_authorized_ip_ranges
     }
