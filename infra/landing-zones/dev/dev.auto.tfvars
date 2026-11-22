@@ -13,11 +13,17 @@ mgmt_ssh_source_prefix = "Internet" # NSG service tag: any public address
 # The Key Vault firewall range (allowed_ip_rules) moved with the vault to
 # infra/platform/keyvault/keyvault.auto.tfvars.
 
-# Who may reach the PUBLIC AKS API server (kubectl from the laptop). Same ISP
-# range as the Key Vault firewall in infra/platform/keyvault/keyvault.auto.tfvars;
-# keep the two in step if the ISP range changes.
+# Who may reach the PUBLIC AKS API server (kubectl from the laptop).
+#
+# EMPTY = no IP filter: the API server answers from any network. This is a test
+# cluster used from changing networks (home ISP, mobile hotspot), and a fixed
+# range kept locking kubectl out. Sign-in is still Entra ID + Azure RBAC, so an
+# open endpoint means "anyone can knock", not "anyone can get in".
+#
+# To restrict again, list CIDRs, e.g. ["163.223.164.0/24"] (the home ISP range,
+# also used by the Key Vault firewall in infra/platform/keyvault).
 # The pipelines use `az aks command invoke`, which does not depend on this list.
-aks_authorized_ip_ranges = ["163.223.164.0/24"]
+aks_authorized_ip_ranges = []
 
 # ── DR: registry geo-replication ──────────────────────────────────────────────
 # OFF by default — the registry stays Basic and single-region, exactly as it is
